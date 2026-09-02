@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agi-yukino"
+version = "0.1.0"
+description = "原生设计的春物侍奉部多角色情感陪伴 Agent"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "AGI Yukino Contributors"},
+]
+keywords = ["ai", "agent", "chatbot", "companion", "oregairu", "multi-agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Chat",
+]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-dotenv>=1.2.2",
+    "openai>=2.41.0",
+    "pydantic>=2.13.4",
+    "pypdf>=5.0.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "python-pptx>=1.0.0",
+    "xlrd>=2.0.1",
+    "psutil>=6.0.0",
+    "mcp>=2.1,<3",
+]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.1.0"]
+postgres = ["psycopg[binary]>=3.2.0"]
+milvus = ["pymilvus==2.6.17"]
+neo4j = ["neo4j>=6.0.0,<7"]
+storage = [
+    "psycopg[binary]>=3.2.0",
+    "pymilvus==2.6.17",
+    "neo4j>=6.0.0,<7",
+]
+
+[project.scripts]
+agi-yukino = "service_club.cli:main"
+
+[tool.setuptools]
+# Keep the tiny ``python agent.py`` compatibility launcher in distributions.
+py-modules = ["agent"]
+
+[tool.setuptools.packages.find]
+include = [
+    "service_club*",
+]
+
+[tool.setuptools.package-data]
+"*" = ["*.sql", "*.json5", "*.json", "*.md", "*.yaml", "*.yml"]
+"service_club.web" = ["templates/*.html", "static/**/*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["service_club"]

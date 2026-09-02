@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#171d39" />
+    <meta name="description" content="AGI Yukino，放学后的总武高侍奉部活动室。" />
+    <title>AGI Yukino · 侍奉部活动室</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23212b50'/%3E%3Cpath d='M32 8v48M11 20l42 24M53 20L11 44M19 12l13 8 13-8M19 52l13-8 13 8' stroke='%23fff4fa' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/static/styles.css?v=anime-mcp-17" />
+  </head>
+  <body>
+    <div class="anime-backdrop" aria-hidden="true">
+      <div class="scene-vignette"></div>
+      <div class="sakura-branch"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="snow-particles"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="light-leak"></div>
+    </div>
+
+    <main class="club-shell" data-character="yukino" data-mode="club" data-chat-open="false">
+      <header class="vn-header">
+        <div class="brand-lockup">
+          <span class="brand-snow" aria-hidden="true">❄</span>
+          <div>
+            <h1>AGI YUKINO</h1>
+            <p><i></i> 侍奉部 <i></i></p>
+          </div>
+        </div>
+
+        <div class="scene-status" aria-label="当前状态">
+          <span id="active-mode">活动室</span>
+          <span id="active-emotion">平静</span>
+          <span id="degraded-state" data-state="ready"><i></i> 在线</span>
+        </div>
+
+        <div class="weather-card" aria-label="窗外天气">
+          <span class="weather-snow">❄</span>
+          <strong id="activity-clock" aria-live="off">--:--</strong>
+          <small>放学后 · 微雪</small>
+        </div>
+        <span id="active-route" class="visually-hidden">route: -</span>
+      </header>
+
+      <aside class="club-rail" aria-label="侍奉部成员">
+        <div class="rail-caption">
+          <span>MEMBERS</span>
+          <small>选择今天陪你说话的人</small>
+        </div>
+
+        <div id="character-list" class="character-list" aria-label="角色选择"></div>
+
+        <div class="mode-switch" aria-label="聊天模式">
+          <button type="button" data-mode="solo">
+            <span>一</span><strong>单独委托</strong><small>SOLO</small>
+          </button>
+          <button type="button" data-mode="club">
+            <span>部</span><strong>部内会议</strong><small>CLUB</small>
+          </button>
+        </div>
+
+        <section class="conversation-shelf" aria-label="历史会话">
+          <header>
+            <div>
+              <span>CONVERSATIONS</span>
+              <small id="conversation-scope-label">部内会议</small>
+            </div>
+            <button id="new-conversation" type="button" aria-label="新建会话"><b>＋</b> 新建</button>
+          </header>
+          <div id="conversation-list" class="conversation-list" aria-live="polite">
+            <p class="conversation-list-empty">正在读取历史委托……</p>
+          </div>
+        </section>
+
+        <div class="rail-footer">
+          <span>総武高校 · 特别教学楼三层</span>
+          <small>非官方粉丝向学习项目</small>
+        </div>
+      </aside>
+
+      <section id="conversation-room" class="conversation-room" aria-label="视觉小说对话区" aria-hidden="true" inert>
+        <div class="mode-scene-badge" aria-live="polite">
+          <span class="solo-badge-copy"><i>一</i><b>单独委托</b><small>PRIVATE REQUEST</small></span>
+          <span class="club-badge-copy"><i>部</i><b>部内会议</b><small>5 MEMBERS · 全员就座</small></span>
+        </div>
+        <header class="conversation-header">
+          <div class="speaker-portrait" aria-hidden="true"></div>
+          <div class="meeting-portraits" aria-label="会议成员">
+            <span class="meeting-member" data-meeting-character="yukino" title="雪乃"></span>
+            <span class="meeting-member" data-meeting-character="yui" title="结衣"></span>
+            <span class="meeting-member" data-meeting-character="hachiman" title="八幡"></span>
+            <span class="meeting-member" data-meeting-character="iroha" title="一色"></span>
+            <span class="meeting-member" data-meeting-character="hiratsuka" title="平冢老师"></span>
+          </div>
+          <div>
+            <small id="mode-kicker">NOW TALKING</small>
+            <h2 id="active-character">雪之下雪乃</h2>
+          </div>
+          <span class="affection" aria-label="信赖度"><i>♥</i><i>♥</i><i>♥</i><i>♥</i><i>♡</i></span>
+          <span class="club-presence"><i></i><span id="meeting-lead">雪乃主持 · 其他成员会自然加入</span></span>
+        </header>
+
+        <div id="messages" class="message-stream" aria-live="polite">
+          <article class="arrival-note assistant">
+            <div class="arrival-label"><span id="arrival-speaker">雪之下雪乃</span><small>SERVICE CLUB</small></div>
+            <p>门没有锁。进来吧。<br />想说的话不必先整理好，坐下再慢慢讲也可以。</p>
+            <span class="dialogue-next" aria-hidden="true">▾</span>
+          </article>
+        </div>
+
+        <form id="composer" class="composer">
+          <label for="input" class="input-caption"><span>你的委托</span><small>REQUEST</small></label>
+          <textarea
+            id="input"
+            rows="2"
+            maxlength="12000"
+            placeholder="那么，今天想委托什么？"
+          ></textarea>
+          <div class="composer-attachments">
+            <button id="attachment-button" type="button" title="添加代码、文档或图片">
+              <span aria-hidden="true">＋</span> 添加附件
+            </button>
+            <input
+              id="attachment-input"
+              type="file"
+              multiple
+              hidden
+              accept=".txt,.md,.py,.js,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.h,.css,.html,.json,.yaml,.yml,.toml,.csv,.pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.webp,.gif"
+            />
+            <div id="attachment-tray" class="attachment-tray" aria-live="polite"></div>
+            <small id="attachment-hint">代码、文档、图片 · 最多 4 个</small>
+          </div>
+          <div class="composer-meta">
+            <span id="character-hint">雪乃会先听你说完</span>
+            <span><kbd>⌘</kbd><kbd>Enter</kbd></span>
+          </div>
+          <button id="send" type="submit">
+            <span>送出委托</span><i aria-hidden="true">➤</i>
+          </button>
+        </form>
+      </section>
+
+      <nav class="quick-dock" aria-label="快捷功能">
+        <button id="memory-toggle" type="button" aria-haspopup="dialog">
+          <span class="dock-icon">▧</span><span>记忆</span><small>MEMORY</small>
+        </button>
+        <button id="capability-toggle" type="button">
+          <span class="dock-icon">⚙</span><span>设置</span><small><b id="capability-count">--</b></small>
+        </button>
+        <label class="dock-toggle">
+          <input id="enable-sticker" type="checkbox" checked />
+          <span class="dock-icon">✿</span><span>贴纸</span><small>STICKER</small>
+        </label>
+        <label class="dock-toggle">
+          <input id="enable-voice" type="checkbox" />
+          <span class="dock-icon">♫</span><span>语音</span><small>VOICE</small>
+        </label>
+        <button id="clear-memory" type="button" class="clear-memory">
+          <span class="dock-icon">↺</span><span>整理</span><small>RESET</small>
+        </button>
+      </nav>
+    </main>
+
+    <dialog id="memory-dialog" class="capability-dialog memory-dialog">
+      <div class="capability-sheet memory-sheet">
+        <header>
+          <div>
+            <p>AGI YUKINO · MEMORY ARCHIVE</p>
+            <h2>侍奉部记忆档案</h2>
+          </div>
+          <button id="memory-close" type="button" aria-label="关闭记忆">×</button>
+        </header>
+
+        <div class="memory-intro">
+          <span>▧</span>
+          <p><strong>只属于这段委托的记忆</strong><small>长期记忆会参与后续回复；删除操作需要再次确认，不会影响其他会话。</small></p>
+          <output id="memory-load-state">正在整理档案</output>
+        </div>
+
+        <form id="memory-search-form" class="memory-search-form" role="search">
+          <label for="memory-search">检索记忆</label>
+          <input id="memory-search" placeholder="例如：称呼、睡眠、考试、喜欢的回应方式……" autocomplete="off" />
+          <button type="submit">查找</button>
+          <button id="memory-search-reset" type="button">全部</button>
+        </form>
+
+        <div class="memory-summary-grid" aria-label="记忆统计">
+          <article><span>◇</span><div><strong id="memory-permanent-count">0</strong><small>长期记忆</small></div></article>
+          <article><span>⌁</span><div><strong id="memory-local-count">0</strong><small>相关片段</small></div></article>
+          <article><span>♢</span><div><strong id="memory-reminder-count">0</strong><small>提醒事项</small></div></article>
+        </div>
+
+        <div class="memory-board">
+          <section class="memory-panel permanent-panel">
+            <header><div><small>LONG-TERM</small><h3>长期记忆</h3></div><span>会带入后续聊天</span></header>
+            <div id="memory-permanent-list" class="memory-list"><p class="memory-empty">还没有需要长期记住的事情。</p></div>
+          </section>
+
+          <section class="memory-panel local-panel">
+            <header><div><small>RETRIEVAL</small><h3>相关记忆片段</h3></div><span id="memory-query-label">按重要度排列</span></header>
+            <div id="memory-local-list" class="memory-list"><p class="memory-empty">还没有可检索的记忆片段。</p></div>
+          </section>
+
+          <section class="memory-panel conversation-panel">
+            <header><div><small>RECENT TURNS</small><h3>最近对话</h3></div><span>只读记录</span></header>
+            <div id="memory-conversation-list" class="memory-list compact"><p class="memory-empty">还没有完成的对话。</p></div>
+          </section>
+
+          <section class="memory-panel reminder-panel">
+            <header><div><small>REMINDERS</small><h3>提醒</h3></div><span>由角色在合适时机提起</span></header>
+            <div id="memory-reminder-list" class="memory-list compact"><p class="memory-empty">当前没有提醒。</p></div>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="capability-dialog" class="capability-dialog settings-dialog">
+      <div class="capability-sheet settings-sheet">
+        <header>
+          <div>
+            <p>AGI YUKINO · LOCAL SETTINGS</p>
+            <h2>活动室设置</h2>
+          </div>
+          <button id="settings-close" type="button" aria-label="关闭设置">×</button>
+        </header>
+
+        <div class="settings-security-note">
+          <span>⌁</span>
+          <p><strong>仅保存在这台电脑</strong><small>密钥写入本机 0600 配置文件，页面只返回掩码，不会显示原文。</small></p>
+          <div id="settings-summary" class="settings-summary"><i></i><span>正在读取设置</span></div>
+        </div>
+
+        <nav class="settings-nav" aria-label="设置分类">
+          <button type="button" data-settings-section="model" class="active"><span>◇</span>模型与 API</button>
+          <button type="button" data-settings-section="agent"><span>✦</span>Agent 与文件</button>
+          <button type="button" data-settings-section="storage"><span>▦</span>记忆数据库</button>
+          <button type="button" data-settings-section="permissions"><span>⌁</span>能力权限</button>
+          <button type="button" data-settings-section="voice"><span>♫</span>语音</button>
+          <button type="button" data-settings-section="stickers"><span>✿</span>贴纸</button>
+          <button type="button" data-settings-section="mcp"><span>⌘</span>MCP</button>
+          <button type="button" data-settings-section="connections"><span>↗</span>通道与邮件</button>
+          <button type="button" data-settings-section="dispatches"><span>⇄</span>外发记录</button>
+        </nav>
+
+        <form id="settings-form" class="settings-form" autocomplete="off">
+          <section class="settings-panel active" data-settings-panel="model">
+            <div class="settings-panel-heading">
+              <div><small>MODEL PROVIDER</small><h3>模型与 API</h3><p>聊天、视觉理解、图片生成和语音共用这组 OpenAI 兼容连接。</p></div>
+              <span id="setting-model-status" class="setting-state">未配置</span>
+            </div>
+            <div class="settings-fields two-columns">
+              <label class="wide-field">API Key <span id="setting-api-key-mask">未保存</span><input id="setting-api-key" type="password" placeholder="留空会保留已经保存的 Key" /></label>
+              <label class="inline-check wide-field"><input id="setting-clear-api-key" type="checkbox" /> 清除已经保存的 API Key</label>
+              <label class="wide-field">Base URL <input id="setting-base-url" inputmode="url" placeholder="https://api.openai.com/v1；官方接口可留空" /></label>
+              <label>主模型 <input id="setting-model" placeholder="gpt-4.1-mini" /></label>
+              <label>备用模型 <input id="setting-fallback-model" placeholder="可留空" /></label>
+              <label>超时时间（秒） <input id="setting-timeout" type="number" min="1" max="120" step="1" /></label>
+              <label>模型最大并发 <input id="setting-model-max-concurrent" type="number" min="1" max="16" step="1" /></label>
+              <label>连续失败熔断阈值 <input id="setting-model-circuit-failures" type="number" min="1" max="10" step="1" /><small>达到阈值后短暂停止请求故障模型，防止雪崩。</small></label>
+              <label>熔断冷却（秒） <input id="setting-model-circuit-cooldown" type="number" min="5" max="600" step="1" /><small>冷却结束后只放行一个探测请求。</small></label>
+              <p id="setting-model-runtime" class="wide-field settings-runtime-note">模型运行状态读取中……</p>
+              <div class="wide-field settings-subheading"><b>Embedding 服务</b><small>可与聊天模型使用不同供应商；留空专用凭据和地址时才复用聊天连接。</small></div>
+              <label class="wide-field">Embedding API Key <span id="setting-embedding-api-key-mask">未保存</span><input id="setting-embedding-api-key" type="password" placeholder="留空会保留专用 Key，未配置时复用聊天 Key" /></label>
+              <label class="inline-check wide-field"><input id="setting-clear-embedding-api-key" type="checkbox" /> 清除专用 Embedding API Key 并改为复用聊天凭据</label>
+              <label class="wide-field">Embedding Base URL <input id="setting-embedding-base-url" inputmode="url" placeholder="留空复用聊天 Base URL" /></label>
+              <label>Embedding 模型 <input id="setting-embedding-model" placeholder="text-embedding-3-small" /><small>启用 Milvus 向量检索时必填。</small></label>
+              <label>Embedding 超时（秒） <input id="setting-embedding-timeout" type="number" min="1" max="120" step="1" /></label>
+            </div>
+            <div class="settings-test-row"><button type="button" data-settings-test="model" data-model-role="primary">测试主模型</button><button type="button" data-settings-test="model" data-model-role="fallback">测试备用模型</button><output id="setting-model-test">请先保存设置，再进行真实调用测试。</output></div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="storage">
+            <div class="settings-panel-heading">
+              <div><small>MEMORY DATA PLANE</small><h3>记忆数据库与知识图谱</h3><p>关系库保存可审计事实；Milvus 和 Neo4j 是可从关系库重建的检索投影。</p></div>
+              <span id="setting-storage-status" class="setting-state">读取中</span>
+            </div>
+            <div class="agent-access-summary">
+              <p><b>事实数据库</b><code id="setting-fact-backend">读取中……</code><small id="setting-fact-location">SQLite / PostgreSQL</small></p>
+              <p><b>向量事实</b><code>memory_embeddings</code><small>删除和重建依据</small></p>
+              <p><b>图谱事实</b><code>knowledge_entities / relations</code><small>会话隔离</small></p>
+            </div>
+            <div class="settings-fields two-columns">
+              <div class="wide-field settings-subheading"><b>Milvus 语义索引</b><small>使用独立 Standalone / Distributed 服务；连接失败时自动回退关系库检索。</small></div>
+              <label>向量后端<select id="setting-vector-backend"><option value="relational">关系库 / pgvector</option><option value="milvus">Milvus</option></select></label>
+              <label>数据库名<input id="setting-milvus-database" placeholder="default" /></label>
+              <label class="wide-field">Milvus URI<input id="setting-milvus-uri" placeholder="http://127.0.0.1:19531" /><small>可用项目提供的 docker-compose.storage.yml 启动；推荐与应用进程分离。</small></label>
+              <label class="wide-field">Milvus Token <span id="setting-milvus-token-mask">未保存</span><input id="setting-milvus-token" type="password" placeholder="留空保留已经保存的 Token" /></label>
+              <label class="inline-check wide-field"><input id="setting-clear-milvus-token" type="checkbox" /> 清除已经保存的 Milvus Token</label>
+              <label class="wide-field">Collection 前缀<input id="setting-milvus-prefix" placeholder="agi_yukino_memory" /><small>每个 Embedding 模型和维度使用独立 Collection。</small></label>
+
+              <div class="wide-field settings-subheading"><b>知识图谱</b><small>关系表始终是事实源；启用 Neo4j 后同步为可遍历的属性图。</small></div>
+              <label>图谱后端<select id="setting-graph-backend"><option value="relational">关系图谱</option><option value="neo4j">Neo4j 投影</option></select></label>
+              <label>数据库名<input id="setting-neo4j-database" placeholder="neo4j" /></label>
+              <label class="wide-field">Neo4j URI<input id="setting-neo4j-uri" placeholder="neo4j://127.0.0.1:7687" /></label>
+              <label>用户名<input id="setting-neo4j-username" placeholder="neo4j" /></label>
+              <label>密码 <span id="setting-neo4j-password-mask">未保存</span><input id="setting-neo4j-password" type="password" placeholder="留空保留" /></label>
+              <label class="inline-check wide-field"><input id="setting-clear-neo4j-password" type="checkbox" /> 清除已经保存的 Neo4j 密码</label>
+              <p id="setting-storage-runtime" class="wide-field settings-runtime-note">索引状态读取中……</p>
+            </div>
+            <div class="settings-test-row"><button type="button" data-settings-test="storage">测试数据后端</button><output id="setting-storage-test">请先保存设置，再进行连接测试。</output></div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="agent">
+            <div class="settings-panel-heading">
+              <div><small>AGENT RUNTIME & FILE ACCESS</small><h3>Agent 与文件权限</h3><p>开启多步任务执行，并明确指定允许创建文件的目录。项目源码默认可读但不可写。</p></div>
+              <span id="setting-agent-status" class="setting-state">未启用</span>
+            </div>
+            <div class="settings-fields two-columns">
+              <label class="switch-field wide-field"><input id="setting-agent-enabled" type="checkbox" /><span></span><b>启用多步 Agent 执行</b></label>
+              <label>单次最多工具步骤 <input id="setting-agent-max-steps" type="number" min="1" max="8" step="1" /></label>
+              <label>Agent 并发 worker <input id="setting-agent-workers" type="number" min="1" max="8" step="1" /><small>不同会话可并行；同一会话仍严格按提交顺序执行。</small></label>
+              <label>全局队列容量 <input id="setting-agent-queue-capacity" type="number" min="4" max="1000" step="1" /><small>达到上限后新委托返回 429，不会静默丢弃。</small></label>
+              <label>单会话排队上限 <input id="setting-agent-session-queue-limit" type="number" min="1" max="20" step="1" /><small>防止单个会话占满全部队列。</small></label>
+              <p id="setting-agent-queue-state" class="wide-field settings-runtime-note">队列状态读取中……</p>
+              <div id="setting-python-sandbox" class="python-sandbox-card wide-field" data-state="missing">
+                <span>⌁</span>
+                <p><b>Python 系统沙箱</b><small id="setting-python-sandbox-detail">正在检查进程隔离后端；后端不可用时拒绝执行。</small></p>
+                <em id="setting-python-sandbox-state">读取中</em>
+              </div>
+              <div class="wide-field settings-subheading"><b>单任务资源预算</b><small>每条新委托会保存一份预算快照；超限后可提高额度并恢复原任务，已完成步骤不会重放。</small></div>
+              <label>执行时长上限（秒） <input id="setting-task-wall-time" type="number" min="10" max="1800" step="1" /><small>只计算实际执行时间，排队和等待确认不计时。</small></label>
+              <label>模型 Token 上限 <input id="setting-task-model-tokens" type="number" min="1000" max="1000000" step="100" /></label>
+              <label>工具调用上限 <input id="setting-task-tool-calls" type="number" min="1" max="100" step="1" /></label>
+              <label>模型调用上限 <input id="setting-task-model-calls" type="number" min="1" max="50" step="1" /></label>
+              <label>单次最大输出 Token <input id="setting-model-max-output-tokens" type="number" min="64" max="8192" step="64" /></label>
+              <label>单任务费用上限 <input id="setting-task-model-cost" type="number" min="0.01" max="100" step="0.01" /><small>只有填写下方模型单价后才启用费用闸门。</small></label>
+              <label>输入单价／百万 Token <input id="setting-input-token-cost" type="number" min="0" max="10000" step="0.000001" /></label>
+              <label>输出单价／百万 Token <input id="setting-output-token-cost" type="number" min="0" max="10000" step="0.000001" /></label>
+              <label>费用币种 <input id="setting-cost-currency" maxlength="12" placeholder="USD" /></label>
+              <label>提醒时区 <input id="setting-timezone" list="timezone-options" placeholder="Asia/Shanghai" /><datalist id="timezone-options"><option value="Asia/Shanghai"></option><option value="Asia/Tokyo"></option><option value="UTC"></option><option value="America/Los_Angeles"></option></datalist><small>使用 IANA 时区，用于解析“明天下午三点”等自然语言提醒。</small></label>
+              <label class="inline-check"><input id="setting-allow-desktop" type="checkbox" /> 允许在桌面创建文件</label>
+              <label class="wide-field">其他可写目录（每行一个绝对路径）<textarea id="setting-agent-write-dirs" rows="7" spellcheck="false" placeholder="/Users/你的名字/Documents/AgentOutput"></textarea><small>新建文件可直接写入；覆盖或修改已有文件仍需在聊天中确认。</small></label>
+              <label class="wide-field">可执行的本机任务（JSON）<textarea id="setting-agent-system-tasks" rows="9" spellcheck="false" placeholder='{"lint": {"command": [".venv/bin/python", "-m", "ruff", "check", "service_club"], "cwd": "project", "timeout_seconds": 120}}'></textarea><small>支持 command、cwd（workspace/project）、timeout_seconds 和 description；不经过 Shell，禁止把密钥写进参数，Agent 每次运行前仍会要求确认。</small></label>
+              <p id="setting-agent-system-tasks-state" class="wide-field settings-runtime-note">尚未配置本机任务。</p>
+            </div>
+            <div class="agent-access-summary">
+              <p><b>内部工作区</b><code id="setting-agent-workspace">读取中……</code><small>可读写</small></p>
+              <p><b>项目源码</b><code id="setting-agent-project">读取中……</code><small>只读</small></p>
+              <p><b>桌面目录</b><code id="setting-agent-desktop">读取中……</code><small>需勾选授权</small></p>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="permissions">
+            <div class="settings-panel-heading">
+              <div><small>CAPABILITY PERMISSION POLICY</small><h3>能力权限与临时授权</h3><p>关闭整项能力或单个动作；需要时只为当前对话发放限时、限次数权限。</p></div>
+              <span id="setting-permission-status" class="setting-state">读取中</span>
+            </div>
+            <div class="permission-policy-note">
+              <span>⌁</span>
+              <p><b>授权不会代替风险确认</b><small>邮件、MCP、Python、文件覆盖等高风险动作仍需单独确认。工作流每个子步骤也会重新检查权限。</small></p>
+              <button id="setting-permission-refresh" type="button">刷新</button>
+            </div>
+            <div id="setting-permission-list" class="permission-policy-list" aria-live="polite"></div>
+            <div class="permission-grant-box">
+              <div>
+                <b>当前会话临时授权</b>
+                <small>授权只属于当前对话；次数在真正执行前原子扣减，可随时撤销。</small>
+              </div>
+              <label>能力<select id="setting-permission-grant-capability"></select></label>
+              <label>动作<select id="setting-permission-grant-action"></select></label>
+              <label>有效期<select id="setting-permission-grant-ttl"><option value="900">15 分钟</option><option value="3600" selected>1 小时</option><option value="14400">4 小时</option><option value="86400">24 小时</option></select></label>
+              <label>可用次数<input id="setting-permission-grant-uses" type="number" min="1" max="50" value="1" /></label>
+              <button id="setting-permission-grant-create" type="button">发放授权</button>
+            </div>
+            <output id="setting-permission-output">权限更改会立即生效。</output>
+            <div id="setting-permission-grants" class="permission-grant-list" aria-live="polite"></div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="voice">
+            <div class="settings-panel-heading">
+              <div><small>TEXT TO SPEECH</small><h3>角色语音</h3><p>启用后仍需在聊天页打开“语音”开关，角色回复才会附带音频。</p></div>
+              <span id="setting-voice-status" class="setting-state">未配置</span>
+            </div>
+            <div class="settings-fields two-columns">
+              <label class="switch-field wide-field"><input id="setting-tts-enabled" type="checkbox" /><span></span><b>启用语音合成</b></label>
+              <label class="wide-field">TTS 模型 <input id="setting-tts-model" placeholder="gpt-4o-mini-tts" /></label>
+              <label>雪乃声音 <input data-voice-character="yukino" placeholder="alloy" /></label>
+              <label>结衣声音 <input data-voice-character="yui" placeholder="alloy" /></label>
+              <label>八幡声音 <input data-voice-character="hachiman" placeholder="alloy" /></label>
+              <label>一色声音 <input data-voice-character="iroha" placeholder="alloy" /></label>
+              <label>平冢老师声音 <input data-voice-character="shizuka" placeholder="alloy" /></label>
+            </div>
+            <div class="settings-test-row">
+              <label>测试角色<select id="setting-voice-test-character"><option value="yukino">雪乃</option><option value="yui">结衣</option><option value="hachiman">八幡</option><option value="iroha">一色</option><option value="shizuka">平冢老师</option></select></label>
+              <button type="button" data-settings-test="voice">生成测试语音</button>
+              <output id="setting-voice-test">尚未测试</output>
+              <audio id="setting-voice-preview" controls hidden></audio>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="stickers">
+            <div class="settings-panel-heading">
+              <div><small>EMOTION STICKERS</small><h3>角色贴纸</h3><p>为不同角色和情绪上传本地 PNG、JPEG、WebP 或 GIF；缺少对应情绪时会使用 neutral。</p></div>
+              <span id="setting-sticker-status" class="setting-state">0 张</span>
+            </div>
+            <div id="sticker-coverage" class="sticker-coverage"></div>
+            <div class="sticker-upload-box">
+              <label>角色<select id="setting-sticker-character"><option value="yukino">雪乃</option><option value="yui">结衣</option><option value="hachiman">八幡</option><option value="iroha">一色</option><option value="shizuka">平冢老师</option></select></label>
+              <label>情绪<select id="setting-sticker-emotion"><option value="neutral">平静</option><option value="happy">开心</option><option value="sad">难过</option><option value="anxious">不安</option><option value="angry">生气</option><option value="lonely">孤独</option><option value="shy">害羞</option><option value="thinking">思考</option></select></label>
+              <label class="sticker-file">图片<input id="setting-sticker-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /></label>
+              <button id="setting-sticker-upload" type="button">上传贴纸</button>
+            </div>
+            <output id="setting-sticker-output">尚未上传素材。</output>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="mcp">
+            <div class="settings-panel-heading">
+              <div><small>MODEL CONTEXT PROTOCOL</small><h3>MCP 连接</h3><p>配置远程 HTTP JSON-RPC 或本机 stdio MCP 服务。保存后能力状态会立即刷新。</p></div>
+              <span id="setting-mcp-status" class="setting-state">未配置</span>
+            </div>
+            <div class="settings-fields">
+              <label>MCP 服务 JSON<textarea id="setting-mcp-endpoints" rows="7" spellcheck="false">{}</textarea><small>格式：{ "服务名": "https://example.com/mcp" }</small></label>
+              <label>鉴权请求头 JSON <span id="setting-mcp-header-mask">未保存</span><textarea id="setting-mcp-headers" rows="6" spellcheck="false" placeholder='留空保留；例如 { "服务名": { "Authorization": "Bearer ..." } }'></textarea></label>
+              <label class="inline-check"><input id="setting-clear-mcp-headers" type="checkbox" /> 清除已经保存的 MCP 请求头</label>
+              <label class="inline-check"><input id="setting-mcp-private-hostnames" type="checkbox" /> 允许 MCP 域名解析到本机或私网地址</label>
+              <div class="settings-subheading"><b>本机 stdio MCP</b><small>按官方生命周期启动独立子进程；命令参数不经过 Shell，应用密钥不会自动传给服务器。</small></div>
+              <label class="switch-field"><input id="setting-mcp-stdio-enabled" type="checkbox" /><span></span><b>启用本机 stdio MCP</b></label>
+              <label>stdio 服务 JSON<textarea id="setting-mcp-stdio-servers" rows="8" spellcheck="false">{}</textarea><small>格式：{ "服务名": { "command": "程序", "args": [], "cwd": "/绝对路径", "timeout_seconds": 20 } }</small></label>
+              <label>stdio 专用环境变量 JSON <span id="setting-mcp-stdio-env-mask">未保存</span><textarea id="setting-mcp-stdio-env" rows="6" spellcheck="false" placeholder='留空保留；例如 { "服务名": { "TOKEN": "..." } }'></textarea><small>应用密钥仅从这里显式传入；SDK 只继承 HOME、LOGNAME、PATH、SHELL、TERM、USER 等基础运行环境，且这些进程边界变量禁止覆盖。</small></label>
+              <label class="inline-check"><input id="setting-clear-mcp-stdio-env" type="checkbox" /> 清除已经保存的 stdio 环境变量</label>
+              <p class="settings-runtime-note">安全提醒：stdio 服务器是以当前用户身份运行的本机程序，可能读取本机文件。Agent 每次启动都会生成确认单；只配置你信任且已核对来源的命令。</p>
+              <p id="setting-mcp-transport-security" class="settings-runtime-note">网络边界状态读取中……</p>
+              <p id="setting-mcp-discovery" class="settings-runtime-note">尚未发现 MCP 工具；保存端点后点击下方 tools/list 进行发现。</p>
+              <p class="settings-runtime-note">建议本机 MCP 直接配置 127.0.0.1 等明确 IP。只有确实需要使用内网域名时才开启上面的选项；连接会固定到校验后的 IP，且不会跟随重定向。</p>
+            </div>
+            <div class="settings-test-row"><label>服务名<input id="setting-mcp-test-server" placeholder="留空测试第一个" /></label><button type="button" data-settings-test="mcp">调用 tools/list</button><output id="setting-mcp-test">尚未测试</output></div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="connections">
+            <div class="settings-panel-heading">
+              <div><small>CHANNELS & MAIL</small><h3>消息通道与邮件</h3><p>配置出站 Webhook 和 SMTP；提醒可由服务端在页面关闭后继续派送。</p></div>
+              <span id="setting-connection-status" class="setting-state">未配置</span>
+            </div>
+            <div class="settings-fields two-columns">
+              <label class="wide-field">出站 Webhook <input id="setting-webhook" inputmode="url" placeholder="https://example.com/webhook" /><small>收到提醒时 POST reminder.due JSON；同一事件使用稳定 event_id 去重。</small></label>
+              <label class="wide-field">出站 Webhook 签名密钥 <span id="setting-webhook-secret-mask">未保存</span><input id="setting-webhook-secret" type="password" placeholder="留空保留；提醒请求使用 HMAC-SHA256 签名" /></label>
+              <label class="inline-check wide-field"><input id="setting-clear-webhook-secret" type="checkbox" /> 清除已经保存的出站签名密钥</label>
+              <label class="wide-field">入站通道签名密钥 <span id="setting-inbound-secret-mask">未保存</span><input id="setting-inbound-secret" type="password" placeholder="QQ、微信和 Webhook 调用 Agent 时必须使用" /><small>签名内容：timestamp + "." + 原始请求体；5 分钟时间窗，event_id 持久防重放。</small></label>
+              <label class="inline-check wide-field"><input id="setting-clear-inbound-secret" type="checkbox" /> 清除已经保存的入站签名密钥（清除后外部通道会拒绝请求）</label>
+              <label class="inline-check wide-field"><input id="setting-background-reminder-delivery" type="checkbox" /> 页面关闭时仍通过 Webhook 派送提醒 <small id="setting-background-delivery-state">未开启</small></label>
+              <label>SMTP 主机 <input id="setting-smtp-host" placeholder="smtp.example.com" /></label>
+              <label>SMTP 端口 <input id="setting-smtp-port" type="number" min="1" max="65535" /></label>
+              <label>SMTP 用户名 <input id="setting-smtp-username" /></label>
+              <label>发件人 <input id="setting-smtp-sender" /></label>
+              <label class="wide-field">SMTP 密码 <span id="setting-smtp-password-mask">未保存</span><input id="setting-smtp-password" type="password" placeholder="留空会保留已经保存的密码" /></label>
+              <label class="inline-check wide-field"><input id="setting-clear-smtp-password" type="checkbox" /> 清除已经保存的 SMTP 密码</label>
+            </div>
+            <div class="settings-test-row"><button type="button" data-settings-test="mail">检查邮件配置</button><output id="setting-mail-test">尚未检查</output></div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="dispatches">
+            <div class="settings-panel-heading">
+              <div><small>EXTERNAL DISPATCH REVIEW</small><h3>外发记录与人工核对</h3><p>查看当前会话的邮件、MCP、插件、媒体和系统任务外发。终态未知时不会自动重发。</p></div>
+              <span id="setting-dispatch-status" class="setting-state">读取中</span>
+            </div>
+            <div class="dispatch-review-note">
+              <span>⌁</span>
+              <p><b>先核对外部系统，再决定如何处理</b><small>“确认已成功”只认领原结果；“明确重试”复用原 dispatch ID 和幂等键，但第三方不支持幂等时仍可能重复执行。</small></p>
+            </div>
+            <div class="dispatch-toolbar">
+              <label>显示
+                <select id="setting-dispatch-filter">
+                  <option value="">全部记录</option>
+                  <option value="uncertain">只看待核对</option>
+                  <option value="completed">只看已完成</option>
+                  <option value="failed">只看失败</option>
+                  <option value="abandoned">只看已放弃</option>
+                </select>
+              </label>
+              <button id="setting-dispatch-refresh" type="button">刷新记录</button>
+              <output id="setting-dispatch-output">仅显示当前对话会话。</output>
+            </div>
+            <div id="setting-dispatch-list" class="dispatch-review-list" aria-live="polite"></div>
+          </section>
+
+          <footer class="settings-actions">
+            <output id="settings-output">修改只会保存在本机。</output>
+            <button id="settings-save" type="submit">保存并立即应用</button>
+          </footer>
+        </form>
+      </div>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" aria-live="assertive"></div>
+    <script src="/static/app.js?v=anime-mcp-17"></script>
+  </body>
+</html>

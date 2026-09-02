@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1350" height="1080" viewBox="0 0 1350 1080">
+  <rect width="1350" height="1080" fill="white"/>
+  <text x="675" y="44" text-anchor="middle" font-size="22" font-weight="bold" fill="#111" font-family="Noto Sans SC, sans-serif">AGI Yukino - 业务用例图</text>
+
+  <!-- 用户：W=220 -->
+  <circle cx="60" cy="202" r="18" fill="none" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="220" x2="60" y2="260" stroke="#333" stroke-width="2"/>
+  <line x1="35" y1="238" x2="85" y2="238" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="260" x2="38" y2="290" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="260" x2="82" y2="290" stroke="#333" stroke-width="2"/>
+  <text x="60" y="310" text-anchor="middle" font-size="14" fill="#222" font-family="Noto Sans SC, sans-serif">用户</text>
+  <ellipse cx="200" cy="220" rx="90" ry="32" fill="#7b5ea7" stroke="#7b5ea7" stroke-width="1.5"/>
+  <text x="200" y="225" text-anchor="middle" font-size="13" fill="white" font-family="Noto Sans SC, sans-serif">陪伴与委托域</text>
+  <line x1="78" y1="220" x2="108" y2="220" stroke="#aaa" stroke-width="1.2"/>
+
+  <ellipse cx="460" cy="100" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="105" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">多角色私聊</text>
+  <ellipse cx="460" cy="180" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="185" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">侍奉部群聊编排</text>
+  <ellipse cx="460" cy="260" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="265" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">记忆、画像与提醒</text>
+  <ellipse cx="460" cy="340" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="345" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">多步工具型委托</text>
+  <line x1="290" y1="220" x2="355" y2="100" stroke="#ccc"/>
+  <line x1="290" y1="220" x2="355" y2="180" stroke="#ccc"/>
+  <line x1="290" y1="220" x2="355" y2="260" stroke="#ccc"/>
+  <line x1="290" y1="220" x2="355" y2="340" stroke="#ccc"/>
+
+  <ellipse cx="710" cy="300" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="710" y="297" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">文件 / 网页 / Python</text>
+  <text x="710" y="313" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">MCP / 邮件 / 工作流</text>
+  <line x1="565" y1="340" x2="605" y2="300" stroke="#ccc"/>
+
+  <!-- 外部平台：W=580 -->
+  <circle cx="60" cy="562" r="18" fill="none" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="580" x2="60" y2="620" stroke="#333" stroke-width="2"/>
+  <line x1="35" y1="598" x2="85" y2="598" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="620" x2="38" y2="650" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="620" x2="82" y2="650" stroke="#333" stroke-width="2"/>
+  <text x="60" y="670" text-anchor="middle" font-size="14" fill="#222" font-family="Noto Sans SC, sans-serif">外部平台</text>
+  <ellipse cx="200" cy="580" rx="90" ry="32" fill="#3a7bd5" stroke="#3a7bd5" stroke-width="1.5"/>
+  <text x="200" y="585" text-anchor="middle" font-size="13" fill="white" font-family="Noto Sans SC, sans-serif">外部集成域</text>
+  <line x1="78" y1="580" x2="108" y2="580" stroke="#aaa" stroke-width="1.2"/>
+  <ellipse cx="460" cy="540" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="545" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">QQ / 微信 / Webhook 入站</text>
+  <ellipse cx="460" cy="620" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="625" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">MCP / 邮件 / 媒体外发</text>
+  <line x1="290" y1="580" x2="355" y2="540" stroke="#ccc"/>
+  <line x1="290" y1="580" x2="355" y2="620" stroke="#ccc"/>
+  <ellipse cx="710" cy="540" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="710" y="537" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">HMAC 验签</text>
+  <text x="710" y="553" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">时间窗与防重放</text>
+  <ellipse cx="710" cy="620" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="710" y="617" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">操作确认、外发账本</text>
+  <text x="710" y="633" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">稳定幂等标识</text>
+  <line x1="565" y1="540" x2="605" y2="540" stroke="#ccc"/>
+  <line x1="565" y1="620" x2="605" y2="620" stroke="#ccc"/>
+
+  <!-- 后台运行时：W=900 -->
+  <circle cx="60" cy="882" r="18" fill="none" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="900" x2="60" y2="940" stroke="#333" stroke-width="2"/>
+  <line x1="35" y1="918" x2="85" y2="918" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="940" x2="38" y2="970" stroke="#333" stroke-width="2"/>
+  <line x1="60" y1="940" x2="82" y2="970" stroke="#333" stroke-width="2"/>
+  <text x="60" y="990" text-anchor="middle" font-size="14" fill="#222" font-family="Noto Sans SC, sans-serif">后台运行时</text>
+  <ellipse cx="200" cy="900" rx="90" ry="32" fill="#2e8b57" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="200" y="905" text-anchor="middle" font-size="13" fill="white" font-family="Noto Sans SC, sans-serif">可靠执行域</text>
+  <line x1="78" y1="900" x2="108" y2="900" stroke="#aaa" stroke-width="1.2"/>
+  <ellipse cx="460" cy="820" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="825" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">持久任务队列</text>
+  <ellipse cx="460" cy="900" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="905" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">提醒与后台工作流</text>
+  <ellipse cx="460" cy="980" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="460" y="985" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">中断恢复与结果验收</text>
+  <line x1="290" y1="900" x2="355" y2="820" stroke="#ccc"/>
+  <line x1="290" y1="900" x2="355" y2="900" stroke="#ccc"/>
+  <line x1="290" y1="900" x2="355" y2="980" stroke="#ccc"/>
+  <ellipse cx="710" cy="820" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="710" y="817" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">同会话串行</text>
+  <text x="710" y="833" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">跨会话并行</text>
+  <ellipse cx="710" cy="980" rx="105" ry="28" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="710" y="977" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">步骤证据、检查点</text>
+  <text x="710" y="993" text-anchor="middle" font-size="13" fill="#222" font-family="Noto Sans SC, sans-serif">副作用防重放</text>
+  <line x1="565" y1="820" x2="605" y2="820" stroke="#ccc"/>
+  <line x1="565" y1="980" x2="605" y2="980" stroke="#ccc"/>
+
+  <!-- 图例 -->
+  <rect x="975" y="70" width="300" height="260" rx="8" fill="white" stroke="#ccc" stroke-width="1.2"/>
+  <text x="1125" y="100" text-anchor="middle" font-size="14" font-weight="bold" fill="#222" font-family="Noto Sans SC, sans-serif">图例</text>
+  <ellipse cx="1080" cy="135" rx="70" ry="22" fill="#f8f8f8" stroke="#bbb" stroke-width="1.5"/>
+  <text x="1080" y="140" text-anchor="middle" font-size="12" fill="#222" font-family="Noto Sans SC, sans-serif">已有用例</text>
+  <ellipse cx="1080" cy="185" rx="70" ry="22" fill="#7b5ea7" stroke="#7b5ea7"/>
+  <text x="1080" y="190" text-anchor="middle" font-size="12" fill="white" font-family="Noto Sans SC, sans-serif">陪伴与委托</text>
+  <ellipse cx="1080" cy="235" rx="70" ry="22" fill="#3a7bd5" stroke="#3a7bd5"/>
+  <text x="1080" y="240" text-anchor="middle" font-size="12" fill="white" font-family="Noto Sans SC, sans-serif">外部集成</text>
+  <ellipse cx="1080" cy="285" rx="70" ry="22" fill="#2e8b57" stroke="#2e8b57"/>
+  <text x="1080" y="290" text-anchor="middle" font-size="12" fill="white" font-family="Noto Sans SC, sans-serif">可靠执行</text>
+</svg>

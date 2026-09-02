@@ -1,0 +1,98 @@
+name: agi-yukino-storage
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    command:
+      - etcd
+      - -advertise-client-urls=http://127.0.0.1:2379
+      - -listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - yukino_etcd:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    command: minio server /minio_data
+    environment:
+      MINIO_ROOT_USER: yukino-minio
+      MINIO_ROOT_PASSWORD: ${YUKINO_MINIO_PASSWORD:?set YUKINO_MINIO_PASSWORD}
+    volumes:
+      - yukino_minio:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  milvus:
+    image: milvusdb/milvus:v2.6.22
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: yukino-minio
+      MINIO_SECRET_ACCESS_KEY: ${YUKINO_MINIO_PASSWORD:?set YUKINO_MINIO_PASSWORD}
+    ports:
+      - "${YUKINO_MILVUS_HOST_PORT:-19531}:19530"
+      - "${YUKINO_MILVUS_HEALTH_PORT:-9092}:9091"
+    volumes:
+      - yukino_milvus:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${YUKINO_NEO4J_BOOTSTRAP_PASSWORD:?set YUKINO_NEO4J_BOOTSTRAP_PASSWORD}
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    ports:
+      - "${YUKINO_NEO4J_HTTP_PORT:-7475}:7474"
+      - "${YUKINO_NEO4J_BOLT_PORT:-7688}:7687"
+    volumes:
+      - yukino_neo4j_data:/data
+      - yukino_neo4j_logs:/logs
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --quiet --tries=1 --spider http://localhost:7474 || exit 1",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    restart: unless-stopped
+
+volumes:
+  yukino_etcd:
+  yukino_minio:
+  yukino_milvus:
+  yukino_neo4j_data:
+  yukino_neo4j_logs:

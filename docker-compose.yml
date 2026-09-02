@@ -1,0 +1,16 @@
+services:
+  agi-yukino:
+    build: .
+    ports:
+      - "8082:8082"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      YUKINO_HOST: 0.0.0.0
+      YUKINO_PORT: 8082
+      YUKINO_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+      - ./assets:/app/assets:ro
+    restart: unless-stopped

@@ -1,0 +1,36 @@
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage*
+htmlcov/
+build/
+dist/
+
+# Runtime state and temporary output
+data/*
+!data/.gitkeep
+tmp/
+*.log
+
+# User-provided media (keep only directory placeholders)
+assets/stickers/*
+!assets/stickers/.gitkeep
+assets/voice_refs/*
+!assets/voice_refs/.gitkeep

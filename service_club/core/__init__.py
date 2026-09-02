@@ -1,0 +1,2 @@
+"""AGI Yukino domain core."""
+
