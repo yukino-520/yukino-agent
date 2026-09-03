@@ -1,19 +1,22 @@
+from __future__ import annotations
+
 import datetime as dt
 import hashlib
 import json
-import os
-import sqlite3
-import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from service_club.core.runtime.event_stream import (
+    append_outbox_event,
+    ensure_event_outbox_schema,
+)
 from service_club.storage.relational import (
     RelationalBackend,
     RelationalConnection,
-    SQLiteRelationalBackend,
+    configured_relational_backend,
 )
 
 
@@ -21,19 +24,21 @@ from service_club.storage.relational import (
 # 参数：无。
 class MemoryManager:
     # 作用：选择关系事实后端并预留向量、知识图谱派生索引绑定点。
-    # 参数 db_path：本地 SQLite 关系事实库路径。
+    # 参数 db_path：仅为旧调用方保留，不参与 PostgreSQL 连接选择。
     # 参数 backend：关系、向量或图谱后端选择或后端实例。
     def __init__(
         self,
-        db_path: str | Path = "data/service_club.sqlite3",
+        db_path: str | Path | None = None,
         *,
         backend: RelationalBackend | None = None,
     ) -> None:
-        self.db_path = Path(db_path)
-        self._allow_temp_fallback = backend is None
-        self.backend = backend or SQLiteRelationalBackend(self.db_path)
+        self.db_path = Path(db_path) if db_path is not None else None
+        self.backend = backend or configured_relational_backend()
+        if self.backend.name != "postgresql":
+            raise ValueError("MemoryManager 运行时仅允许 PostgreSQL 事实后端。")
         self.vector_store: Any | None = None
         self.knowledge_graph: Any | None = None
+        self.search_index: Any | None = None
 
     # 作用：绑定可选向量派生索引；关系库中的记忆与向量缓存仍是规范事实。
     # 参数 vector_store：可选的 Milvus 等外部向量派生索引。
@@ -45,26 +50,20 @@ class MemoryManager:
     def bind_knowledge_graph(self, knowledge_graph: Any | None) -> None:
         self.knowledge_graph = knowledge_graph
 
-    # 作用：初始化全部事实表；本地 SQLite 不可写时可降级到临时数据库。
+    def bind_search_index(self, search_index: Any) -> None:
+        self.search_index = search_index
+
+    # 作用：初始化全部 PostgreSQL 事实表；失败时直接终止初始化。
     # 参数：无。
     def init(self) -> None:
-        try:
-            if self.backend.name == "sqlite":
-                self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._init_at_path(self.db_path)
-        except (OSError, sqlite3.OperationalError):
-            if not self._allow_temp_fallback or self.backend.name != "sqlite":
-                raise
-            self._switch_to_temp_db()
+        self._init_at_path(self.db_path)
 
     # 作用：创建并迁移项目所需的关系事实表、约束和查询索引。
-    # 参数 db_path：本地 SQLite 关系事实库路径。
-    def _init_at_path(self, db_path: Path) -> None:
-        if self.backend.name == "sqlite":
-            db_path.parent.mkdir(parents=True, exist_ok=True)
+    # 参数 db_path：已废弃的本地路径参数。
+    def _init_at_path(self, db_path: Path | None = None) -> None:
+        del db_path
         with self.backend.connect(immediate=True) as conn:
-            if self.backend.name == "postgresql":
-                conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversation_logs (
@@ -136,6 +135,7 @@ class MemoryManager:
                 )
                 """
             )
+            ensure_event_outbox_schema(conn)
             self._add_missing_columns(
                 conn,
                 "memories",
@@ -528,7 +528,7 @@ class MemoryManager:
                 """
             )
 
-    # 作用：为已有部署补加缺失列，兼容 SQLite 与 PostgreSQL 的表结构查询。
+    # 作用：为已有 PostgreSQL 部署补加缺失列。
     # 参数 connection：用于检查和迁移表结构的关系库连接。
     # 参数 table：需要检查或迁移结构的数据库表名。
     # 参数 additions：待补加的数据库列名与 SQL 类型定义映射。
@@ -538,17 +538,6 @@ class MemoryManager:
         table: str,
         additions: dict[str, str],
     ) -> None:
-        if self.backend.name == "sqlite":
-            columns = {
-                str(row[1])
-                for row in connection.execute(f"PRAGMA table_info({table})")
-            }
-            for column, definition in additions.items():
-                if column not in columns:
-                    connection.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
-                    )
-            return
         for column, definition in additions.items():
             connection.execute(
                 f"""
@@ -556,13 +545,6 @@ class MemoryManager:
                 ADD COLUMN IF NOT EXISTS {column} {definition}
                 """
             )
-
-    # 作用：将不可用的本地 SQLite 事实库切换到系统临时目录并重新初始化。
-    # 参数：无。
-    def _switch_to_temp_db(self) -> None:
-        self.db_path = Path(tempfile.gettempdir()) / f"service_club_{os.getpid()}.sqlite3"
-        self.backend = SQLiteRelationalBackend(self.db_path)
-        self._init_at_path(self.db_path)
 
     # 作用：将显式记忆幂等写入关系事实表，空内容被忽略。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -577,37 +559,87 @@ class MemoryManager:
         source: str = "explicit",
         importance: float = 0.7,
         idempotency_key: str = "",
-    ) -> None:
+    ) -> int | None:
         if not content.strip():
-            return
-        try:
-            with self.backend.connect() as conn:
-                conn.execute(
+            return None
+        normalized = content.strip()
+        now = time.time()
+        row: dict[str, Any] | None = None
+        with self.backend.connect() as conn:
+            inserted = conn.execute(
                     """
                     INSERT INTO memories(
                         session_id, content, source, importance,
                         idempotency_key, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT DO NOTHING
+                    RETURNING id, session_id, content, source, importance, created_at
                     """,
                     (
                         session_id,
-                        content.strip(),
+                        normalized,
                         source,
                         importance,
                         idempotency_key[:128],
-                        time.time(),
+                        now,
                     ),
+                ).fetchone()
+            if inserted is not None:
+                row = dict(inserted)
+                append_outbox_event(
+                    conn,
+                    event_type="memory.created",
+                    aggregate_type="memory",
+                    aggregate_id=str(row["id"]),
+                    partition_key=session_id,
+                    payload=row,
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            self.remember(
-                session_id,
-                content,
-                source,
-                importance,
-                idempotency_key,
-            )
+        if row is None:
+            existing = self.memory_by_idempotency(session_id, idempotency_key)
+            return int(existing["id"]) if existing else None
+        if self.search_index is not None:
+            try:
+                self.search_index.upsert_memory(row)
+            except Exception:
+                pass
+        return int(row["id"])
+
+    def memory_candidates_by_ids(
+        self, session_id: str, memory_ids: list[int]
+    ) -> list[dict[str, Any]]:
+        ids = sorted({int(value) for value in memory_ids if int(value) > 0})
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        with self.backend.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, session_id, content, source, importance, created_at
+                FROM memories
+                WHERE session_id = ? AND id IN ({placeholders})
+                """,
+                [session_id, *ids],
+            ).fetchall()
+        by_id = {int(row["id"]): dict(row) for row in rows}
+        return [by_id[value] for value in memory_ids if value in by_id]
+
+    def iter_memories(self, *, batch_size: int = 500):  # noqa: ANN201
+        last_id = 0
+        while True:
+            with self.backend.connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, session_id, content, source, importance, created_at
+                    FROM memories WHERE id > ? ORDER BY id LIMIT ?
+                    """,
+                    (last_id, max(1, min(batch_size, 5000))),
+                ).fetchall()
+            if not rows:
+                return
+            for row in rows:
+                item = dict(row)
+                yield item
+                last_id = int(item["id"])
 
     # 作用：按会话和幂等键查找已存在的记忆事实，供重复请求复用。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -931,12 +963,24 @@ class MemoryManager:
                         f"DELETE FROM {table} WHERE session_id = ?", (session_id,)
                     )
                     deleted_total += int(cursor.rowcount or 0)
+                append_outbox_event(
+                    conn,
+                    event_type="memory.session_cleared",
+                    aggregate_type="memory_session",
+                    aggregate_id=session_id,
+                    partition_key=session_id,
+                    payload={"session_id": session_id},
+                )
             if self.vector_store is not None:
                 self.vector_store.delete_session(session_id)
+            if self.search_index is not None:
+                try:
+                    self.search_index.delete_session(session_id)
+                except Exception:
+                    pass
             return deleted_total
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return self.clear(session_id)
+        except Exception:
+            raise
 
     # 作用：按内容查询删除记忆及关联向量、图谱证据，并撤销匹配画像事实。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -970,8 +1014,22 @@ class MemoryManager:
                     (session_id, f"%{query}%"),
                 )
                 deleted = cursor.rowcount if cursor.rowcount is not None else 0
+                for memory_id in memory_ids:
+                    append_outbox_event(
+                        conn,
+                        event_type="memory.deleted",
+                        aggregate_type="memory",
+                        aggregate_id=str(memory_id),
+                        partition_key=session_id,
+                        payload={"id": memory_id, "session_id": session_id},
+                    )
             if self.vector_store is not None and memory_ids:
                 self.vector_store.delete_memory_ids(memory_ids)
+            if self.search_index is not None and memory_ids:
+                try:
+                    self.search_index.delete_memories(memory_ids)
+                except Exception:
+                    pass
             if self.knowledge_graph is not None:
                 for content in memory_contents:
                     self.knowledge_graph.delete_evidence(
@@ -979,9 +1037,8 @@ class MemoryManager:
                         hashlib.sha256(content.encode("utf-8")).hexdigest(),
                     )
             return deleted + self.revoke_profile_facts_matching(session_id, query)
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return self.forget(session_id, query)
+        except Exception:
+            raise
 
     # 作用：按事实 ID 删除单条记忆，并同步清理向量与图谱派生数据。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -1001,17 +1058,29 @@ class MemoryManager:
                     "DELETE FROM memories WHERE id = ? AND session_id = ?",
                     (memory_id, session_id),
                 )
+                append_outbox_event(
+                    conn,
+                    event_type="memory.deleted",
+                    aggregate_type="memory",
+                    aggregate_id=str(memory_id),
+                    partition_key=session_id,
+                    payload={"id": memory_id, "session_id": session_id},
+                )
             if self.vector_store is not None:
                 self.vector_store.delete_memory_ids([memory_id])
+            if self.search_index is not None:
+                try:
+                    self.search_index.delete_memories([memory_id])
+                except Exception:
+                    pass
             if self.knowledge_graph is not None:
                 self.knowledge_graph.delete_evidence(
                     session_id,
                     hashlib.sha256(content.encode("utf-8")).hexdigest(),
                 )
             return True
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return self.forget_by_id(session_id, memory_id)
+        except Exception:
+            raise
 
     # 作用：幂等创建已排期或待补充时间的提醒事实，并返回规范记录。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -1069,16 +1138,8 @@ class MemoryManager:
                         (session_id, idempotency_key[:128]),
                     ).fetchone()
                     reminder_id = int(row["id"]) if row is not None else 0
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return self.add_reminder(
-                session_id,
-                content,
-                due_at=due_at,
-                timezone=timezone,
-                recurrence=recurrence,
-                idempotency_key=idempotency_key,
-            )
+        except Exception:
+            raise
         return self.get_reminder(session_id, reminder_id) if reminder_id else None
 
     # 作用：按会话和幂等键读取已有提醒，避免重复创建同一副作用任务。
@@ -1510,22 +1571,8 @@ class MemoryManager:
                         time.time(),
                     ),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            self.save_conversation(
-                session_id=session_id,
-                character=character,
-                chat_mode=chat_mode,
-                user_message=user_message,
-                assistant_reply=assistant_reply,
-                emotion=emotion,
-                tool_results=tool_results,
-                attachments=attachments,
-                execution=execution,
-                trace_id=trace_id,
-                degraded=degraded,
-                degradation_reason=degradation_reason,
-            )
+        except Exception:
+            raise
 
     # 作用：读取会话最近对话事实，并安全还原 JSON 执行元数据。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -1707,9 +1754,8 @@ class MemoryManager:
                     """,
                     (session_id, label, intensity, time.time()),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            self.save_emotion_turn(session_id, label, intensity)
+        except Exception:
+            raise
 
     # 作用：按时间正序返回会话最近若干轮情绪事实。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -1769,15 +1815,8 @@ class MemoryManager:
                 if inserted is None:
                     raise RuntimeError("主动关怀记录创建失败。")
                 nudge_id = int(inserted["id"])
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return self.schedule_nudge(
-                session_id=session_id,
-                content=content,
-                reason=reason,
-                emotion=emotion,
-                due_at=due_at,
-            )
+        except Exception:
+            raise
         return {
             "id": nudge_id,
             "session_id": session_id,
@@ -1835,9 +1874,8 @@ class MemoryManager:
                     """,
                     (now, session_id),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return 0
+        except Exception:
+            raise
         return int(cursor.rowcount or 0)
 
     # 作用：原子把一条待投递关怀标记为已投递，避免并发重复发送。
@@ -1854,9 +1892,8 @@ class MemoryManager:
                     """,
                     (delivered_at, delivered_at, nudge_id),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return False
+        except Exception:
+            raise
         return int(cursor.rowcount or 0) == 1
 
     # 作用：返回各角色路由累计轮数、成功数和总延迟事实。
@@ -1904,9 +1941,8 @@ class MemoryManager:
                     """,
                     (agent_id, 1 if success else 0, latency_ms, time.time()),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            self.record_route_result(agent_id, success=success, latency_ms=latency_ms)
+        except Exception:
+            raise
 
     # 作用：读取会话当前持久 PAD 情绪状态。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -1968,17 +2004,8 @@ class MemoryManager:
                         updated_at,
                     ),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            self.save_affective_state(
-                session_id=session_id,
-                label=label,
-                intensity=intensity,
-                pleasure=pleasure,
-                arousal=arousal,
-                dominance=dominance,
-                updated_at=updated_at,
-            )
+        except Exception:
+            raise
 
     # 作用：以证据哈希更新行为习惯候选，达到重复证据阈值后转为活跃。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -2076,15 +2103,8 @@ class MemoryManager:
                 "changed": True,
                 "reason": "evidence_recorded",
             }
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return self.observe_instinct(
-                session_id=session_id,
-                rule_key=rule_key,
-                content=content,
-                evidence_hash=evidence_hash,
-                now=now,
-            )
+        except Exception:
+            raise
 
     # 作用：按可选生命周期状态列出会话行为习惯及其置信度证据。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -2136,8 +2156,8 @@ class MemoryManager:
                     """,
                     [now, now, *instinct_ids],
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
+        except Exception:
+            raise
 
     # 作用：根据明确反馈调整近期使用习惯的置信度和生命周期状态。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -2179,9 +2199,8 @@ class MemoryManager:
                         {"id": int(row["id"]), "confidence": confidence, "status": status}
                     )
             return adjusted
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return []
+        except Exception:
+            raise
 
     # 作用：按活跃与候选的不同截止时间归档缺少新证据的行为习惯。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -2209,9 +2228,8 @@ class MemoryManager:
                     (now, session_id, active_before, candidate_before),
                 )
             return int(cursor.rowcount or 0)
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return 0
+        except Exception:
+            raise
 
     # 作用：将指定行为习惯标记为用户撤销，阻止后续证据自动恢复。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -2229,9 +2247,8 @@ class MemoryManager:
                     (now, session_id, instinct_id),
                 )
             return int(cursor.rowcount or 0) == 1
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            return False
+        except Exception:
+            raise
 
     # 作用：幂等保存上下文摘要、来源哈希和压缩预算统计。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -2278,8 +2295,8 @@ class MemoryManager:
                         updated_at,
                     ),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
+        except Exception:
+            raise
 
     # 作用：读取会话最近一次上下文压缩检查点。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -2312,9 +2329,8 @@ class MemoryManager:
                     """,
                     (session_id, summary, time.time()),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            self.upsert_user_profile(session_id, summary)
+        except Exception:
+            raise
 
     # 作用：读取会话当前用户画像派生摘要及更新时间。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -3058,16 +3074,8 @@ class MemoryManager:
                         time.time(),
                     ),
                 )
-        except sqlite3.OperationalError:
-            self._switch_to_temp_db()
-            self.save_reflection(
-                session_id=session_id,
-                summary=summary,
-                emotion=emotion,
-                character=character,
-                chat_mode=chat_mode,
-                salience=salience,
-            )
+        except Exception:
+            raise
 
     # 作用：按时间倒序读取会话最近的轮次反思事实。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。

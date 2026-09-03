@@ -1,3 +1,6 @@
+include:
+  - docker-compose.storage.yml
+
 services:
   agi-yukino:
     build: .
@@ -10,6 +13,16 @@ services:
       YUKINO_HOST: 0.0.0.0
       YUKINO_PORT: 8082
       YUKINO_DATA_DIR: /app/data
+      YUKINO_DATABASE_URL: postgresql://yukino:${YUKINO_POSTGRES_PASSWORD}@postgres:5432/yukino
+      YUKINO_ELASTICSEARCH_URL: http://elasticsearch:9200
+      YUKINO_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
       - ./assets:/app/assets:ro

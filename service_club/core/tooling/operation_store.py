@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from service_club.storage.relational import RelationalBackend, SQLiteRelationalBackend
+from service_club.storage.relational import RelationalBackend, configured_relational_backend
 
 
 # 作用：持久保存需要用户确认的文件或外部能力操作，并控制其状态流转。
@@ -19,8 +19,8 @@ class AgentOperationStore:
     DEFAULT_TTL_SECONDS = 30 * 60
 
     # 作用：初始化确认操作存储，并确保数据库结构可用。
-    # 参数 db_path：未注入 backend 时使用的 SQLite 数据库路径。
-    # 参数 backend：可选关系存储后端，用于 PostgreSQL/SQLite 统一读写。
+    # 参数 db_path：旧版路径参数，运行时不使用。
+    # 参数 backend：可选关系存储后端，用于 PostgreSQL 统一读写。
     def __init__(
         self,
         db_path: str | Path | None = None,
@@ -28,9 +28,7 @@ class AgentOperationStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if db_path is None:
-                raise ValueError("SQLite 确认队列需要数据库路径。")
-            backend = SQLiteRelationalBackend(db_path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.db_path = Path(db_path) if db_path is not None else None
         self._ensure_schema()
@@ -59,25 +57,12 @@ class AgentOperationStore:
                 )
                 """
             )
-            if self.backend.name == "sqlite":
-                columns = {
-                    str(row[1])
-                    for row in conn.execute("PRAGMA table_info(agent_operations)")
-                }
-                if "task_id" not in columns:
-                    conn.execute(
-                        """
-                        ALTER TABLE agent_operations
-                        ADD COLUMN task_id TEXT NOT NULL DEFAULT ''
-                        """
-                    )
-            else:
-                conn.execute(
-                    """
-                    ALTER TABLE agent_operations
-                    ADD COLUMN IF NOT EXISTS task_id TEXT NOT NULL DEFAULT ''
-                    """
-                )
+            conn.execute(
+                """
+                ALTER TABLE agent_operations
+                ADD COLUMN IF NOT EXISTS task_id TEXT NOT NULL DEFAULT ''
+                """
+            )
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_agent_operations_session_status

@@ -28,13 +28,6 @@ class YukinoSettings:
     port: int
     model_provider: str
 
-    # 作用：返回数据目录下的 SQLite 主数据库路径。
-    # 参数：无。
-    @property
-    # 作用：执行“database_path”对应的内部处理步骤，完成输入转换、状态处理并返回约定结果。
-    def database_path(self) -> Path:
-        return self.data_dir / "service_club.sqlite3"
-
     # 作用：返回项目内置贴纸资源目录。
     # 参数：无。
     @property

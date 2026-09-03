@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import math
 import re
 import time
@@ -65,12 +67,14 @@ class HybridMemoryRetriever:
         *,
         embedding_provider: Any | None = None,
         vector_store: Any | None = None,
+        search_index: Any | None = None,
         knowledge_graph: Any | None = None,
         clock=time.time,
     ) -> None:  # noqa: ANN001
         self.store = store
         self.embedding_provider = embedding_provider
         self.vector_store = vector_store
+        self.search_index = search_index
         self.knowledge_graph = knowledge_graph
         self._clock = clock
 
@@ -79,11 +83,40 @@ class HybridMemoryRetriever:
     # 参数 query：用于检索、匹配或遗忘的用户查询文本。
     # 参数 limit：本次查询、返回或格式化允许的最大条数。
     def search(self, session_id: str, query: str, limit: int = 5) -> list[MemoryHit]:
-        rows = self.store.list_memory_candidates(session_id, limit=200)
+        if not query.strip():
+            rows = self.store.list_memory_candidates(session_id, limit=max(limit * 4, 20))
+            return self._rank_without_query(rows, limit)
+
+        fetch_limit = max(50, min(limit * 20, 300))
+        lexical_hits = (
+            self.search_index.search_memories(session_id, query, limit=fetch_limit)
+            if self.search_index is not None
+            else []
+        )
+        semantic_scores = self._semantic_candidates(
+            session_id, query, limit=fetch_limit
+        )
+        candidate_ids = list(
+            dict.fromkeys(
+                [int(hit.id) for hit in lexical_hits]
+                + [memory_id for memory_id, _ in sorted(semantic_scores.items(), key=lambda item: item[1], reverse=True)]
+            )
+        )
+        if candidate_ids:
+            rows = self.store.memory_candidates_by_ids(session_id, candidate_ids)
+        else:
+            rows = self.store.list_memory_candidates(session_id, limit=min(fetch_limit, 50))
         if not rows:
             return []
-        if not query.strip():
-            return self._rank_without_query(rows, limit)
+
+        lexical_ranks = {int(hit.id): int(hit.rank) for hit in lexical_hits}
+        semantic_ranks = {
+            memory_id: rank
+            for rank, (memory_id, _) in enumerate(
+                sorted(semantic_scores.items(), key=lambda item: item[1], reverse=True),
+                start=1,
+            )
+        }
 
         query_tokens = self._tokens(query)
         query_grams = self._cjk_ngrams(query)
@@ -100,10 +133,11 @@ class HybridMemoryRetriever:
         lexical_max = max(raw_lexical, default=0.0) or 1.0
         now = self._clock()
         vector_scores = self._vector_scores(rows, query, now, session_id)
+        vector_scores.update(semantic_scores)
         graph_scores = self._graph_scores(rows, query, session_id)
         has_vector_channel = bool(vector_scores)
         hits: list[MemoryHit] = []
-        for row, _tokens, lexical_raw in zip(rows, document_tokens, raw_lexical, strict=True):
+        for row, _tokens, lexical_raw in zip(rows, document_tokens, raw_lexical):
             content = str(row["content"])
             lexical = lexical_raw / lexical_max
             char_similarity = self._dice(query_grams, self._cjk_ngrams(content))
@@ -115,26 +149,31 @@ class HybridMemoryRetriever:
             exact = self._exact_signal(query, content)
             vector = vector_scores.get(int(row["id"]), 0.0)
             graph = graph_scores.get(int(row["id"]), 0.0)
+            lexical_rrf = 1.0 / (60 + lexical_ranks[int(row["id"])]) if int(row["id"]) in lexical_ranks else 0.0
+            vector_rrf = 1.0 / (60 + semantic_ranks[int(row["id"])]) if int(row["id"]) in semantic_ranks else 0.0
+            rrf = (lexical_rrf + vector_rrf) * 30.5
             if has_vector_channel:
                 score = (
-                    0.29 * lexical
+                    0.24 * lexical
                     + 0.14 * char_similarity
-                    + 0.14 * concept
-                    + 0.21 * vector
+                    + 0.12 * concept
+                    + 0.18 * vector
                     + 0.1 * graph
                     + 0.07 * importance
                     + 0.03 * recency
                     + 0.02 * exact
+                    + 0.10 * rrf
                 )
             else:
                 score = (
-                    0.35 * lexical
+                    0.31 * lexical
                     + 0.18 * char_similarity
                     + 0.16 * concept
                     + 0.14 * graph
                     + 0.09 * importance
                     + 0.05 * recency
                     + 0.03 * exact
+                    + 0.04 * rrf
                 )
             if score < self.MIN_SCORE or not any(
                 (lexical, char_similarity, concept, exact, vector >= 0.55, graph >= 0.55)
@@ -149,6 +188,7 @@ class HybridMemoryRetriever:
                 "exact": round(exact, 4),
                 "vector": round(vector, 4),
                 "graph": round(graph, 4),
+                "rrf": round(rrf, 4),
             }
             hits.append(
                 MemoryHit(
@@ -165,6 +205,24 @@ class HybridMemoryRetriever:
         hits.sort(key=lambda item: (item.score, item.importance, item.created_at), reverse=True)
         return hits[:limit]
 
+    def _semantic_candidates(
+        self, session_id: str, query: str, *, limit: int
+    ) -> dict[int, float]:
+        provider = self.embedding_provider
+        if provider is None or not provider.enabled or self.vector_store is None:
+            return {}
+        try:
+            query_vector = provider.embed([query])[0]
+            return self.vector_store.search(
+                session_id=session_id,
+                model=provider.model,
+                query_vector=query_vector,
+                candidate_ids=None,
+                limit=limit,
+            )
+        except Exception:
+            return {}
+
     # 作用：汇总当前启用的检索通道、派生索引状态和降级说明。
     # 参数：无。
     def status(self) -> dict[str, object]:
@@ -173,7 +231,7 @@ class HybridMemoryRetriever:
             if self.embedding_provider is not None
             else {"enabled": False, "model": "", "last_error": ""}
         )
-        channels = ["bm25", "cjk_char_ngram", "concept", "importance", "recency"]
+        channels = ["elasticsearch_bm25", "rrf", "cjk_char_ngram", "concept", "importance", "recency"]
         if provider_status["enabled"]:
             channels.append("embedding")
         vector_index = (
@@ -208,6 +266,7 @@ class HybridMemoryRetriever:
             "embedding_last_error": provider_status["last_error"],
             "vector_index": vector_index,
             "knowledge_graph": graph_index,
+            "search_index": self.search_index.status() if self.search_index is not None else {"ok": False, "enabled": False},
             "degradation": (
                 "" if provider_status["enabled"] and not provider_status["last_error"]
                 else "向量服务未配置或失败时使用本地概念语义与字符片段召回"

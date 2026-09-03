@@ -18,12 +18,7 @@ class VectorStoreConfigurationError(ValueError):
 # 作用：把关系库中的向量事实投影到可重建的 Milvus 派生索引。
 # 参数：无。
 class MilvusVectorStore:
-    """Best-effort Milvus index backed by relational embedding facts.
-
-    Milvus is deliberately a derived index.  Callers always provide the
-    relational candidate IDs, which prevents stale or cross-session index
-    entries from becoming visible to retrieval.
-    """
+    """Best-effort Milvus index backed by PostgreSQL embedding facts."""
 
     # 作用：保存连接与集合命名配置，客户端按需创建且不改变关系库事实源地位。
     # 参数 uri：Milvus 或 Neo4j 服务的连接地址。
@@ -111,11 +106,11 @@ class MilvusVectorStore:
         session_id: str,
         model: str,
         query_vector: list[float],
-        candidate_ids: list[int],
+        candidate_ids: list[int] | None = None,
         limit: int,
     ) -> dict[int, float]:
-        candidates = sorted({int(value) for value in candidate_ids if int(value) > 0})
-        if not session_id or not model or not query_vector or not candidates:
+        candidates = sorted({int(value) for value in (candidate_ids or []) if int(value) > 0})
+        if not session_id or not model or not query_vector:
             return {}
         collection = self._collection_name(model, len(query_vector))
         try:
@@ -123,15 +118,14 @@ class MilvusVectorStore:
             if not client.has_collection(collection_name=collection):
                 self._mark_connected()
                 return {}
-            expression = (
-                f'session_id == "{self._escape_string(session_id)}" '
-                f"and memory_id in [{','.join(str(value) for value in candidates)}]"
-            )
+            expression = f'session_id == "{self._escape_string(session_id)}"'
+            if candidates:
+                expression += f" and memory_id in [{','.join(str(value) for value in candidates)}]"
             raw = client.search(
                 collection_name=collection,
                 data=[[float(value) for value in query_vector]],
                 filter=expression,
-                limit=max(1, min(int(limit), len(candidates))),
+                limit=max(1, min(int(limit), len(candidates) if candidates else 500)),
                 output_fields=["session_id", "model"],
             )
             self._searches += 1
@@ -147,7 +141,7 @@ class MilvusVectorStore:
                     score = min(1.0, max(0.0, float(distance)))
                 except (TypeError, ValueError):
                     continue
-                if memory_id in candidate_set:
+                if not candidate_set or memory_id in candidate_set:
                     scores[memory_id] = score
             return scores
         except Exception as exc:

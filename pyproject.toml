@@ -39,15 +39,22 @@ dependencies = [
     "xlrd>=2.0.1",
     "psutil>=6.0.0",
     "mcp>=2.1,<3",
+    "psycopg[binary]>=3.2.0,<4",
+    "elasticsearch>=8.17.0,<9",
+    "confluent-kafka>=2.8.0,<3",
 ]
 
 [project.optional-dependencies]
 dev = ["ruff>=0.1.0"]
-postgres = ["psycopg[binary]>=3.2.0"]
+postgres = ["psycopg[binary]>=3.2.0,<4"]
+search = ["elasticsearch>=8.17.0,<9"]
+events = ["confluent-kafka>=2.8.0,<3"]
 milvus = ["pymilvus==2.6.17"]
 neo4j = ["neo4j>=6.0.0,<7"]
 storage = [
-    "psycopg[binary]>=3.2.0",
+    "psycopg[binary]>=3.2.0,<4",
+    "elasticsearch>=8.17.0,<9",
+    "confluent-kafka>=2.8.0,<3",
     "pymilvus==2.6.17",
     "neo4j>=6.0.0,<7",
 ]

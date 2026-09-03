@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from service_club.storage.relational import (
     RelationalBackend,
-    SQLiteRelationalBackend,
+    configured_relational_backend,
 )
 
 
@@ -37,8 +37,8 @@ class AgentRequestStore:
     STALE_AFTER_SECONDS = 5 * 60
 
     # 作用：绑定关系型存储并初始化请求幂等表。
-    # 参数 db_path：使用 SQLite 时的数据库文件路径。
-    # 参数 backend：可选的关系型存储后端；未提供时使用 SQLite。
+    # 参数 db_path：旧版路径参数，运行时不使用。
+    # 参数 backend：可选的关系型存储后端；未提供时读取 PostgreSQL 配置。
     def __init__(
         self,
         db_path: str | Path | None = None,
@@ -46,9 +46,7 @@ class AgentRequestStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if db_path is None:
-                raise ValueError("SQLite Agent 请求仓库需要数据库路径。")
-            backend = SQLiteRelationalBackend(db_path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.db_path = Path(db_path) if db_path is not None else None
         self._ensure_schema()

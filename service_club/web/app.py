@@ -132,6 +132,7 @@ AGENT_WORKER = BackgroundJobWorker(
 # 作用：执行“lifespan”对应的内部处理步骤，完成输入转换、状态处理并返回约定结果。
 # 参数 _：调用方传入的_，用于本次处理。
 async def lifespan(_: FastAPI):
+    CORE.start_data_plane()
     BACKGROUND_WORKER.start()
     AGENT_WORKER.start()
     try:
@@ -139,6 +140,7 @@ async def lifespan(_: FastAPI):
     finally:
         AGENT_WORKER.stop()
         BACKGROUND_WORKER.stop()
+        CORE.stop_data_plane()
 
 app = FastAPI(
     title="AGI Yukino",
@@ -251,6 +253,21 @@ async def security_headers(request: Request, call_next):  # noqa: ANN001
 # 字段：session_id：该对象中的结构化字段。、confirmed：该对象中的结构化字段。
 class ClearMemoryRequest(BaseModel):
     session_id: str = "default"
+    confirmed: bool = False
+
+
+class KnowledgeDocumentRequest(BaseModel):
+    knowledge_base: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    title: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=1, max_length=2_000_000)
+    source_uri: str = Field(default="", max_length=2048)
+    metadata: dict[str, object] = Field(default_factory=dict)
+    confirmed: bool = False
+
+
+class KnowledgeDocumentDeleteRequest(BaseModel):
+    knowledge_base: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    document_id: str = Field(min_length=32, max_length=32, pattern=r"^[a-f0-9]{32}$")
     confirmed: bool = False
 
 
@@ -864,6 +881,9 @@ def _settings_snapshot() -> dict:
                 "backend": app.state.core.memory.backend.name,
                 "location": app.state.core.memory.backend.location,
             },
+            "search": app.state.core.search_index.status(),
+            "events": app.state.core.event_stream.status(),
+            "knowledge_base": app.state.core.knowledge_base.status(),
             "vector": {
                 "backend": os.getenv("YUKINO_VECTOR_BACKEND", "relational"),
                 "uri": os.getenv("YUKINO_MILVUS_URI", ""),
@@ -1473,6 +1493,8 @@ def test_runtime_settings(payload: SettingsTestRequest) -> dict:
         )
         return {"area": "mcp", "message": "MCP tools/list 调用成功。" if result["ok"] else result.get("error", "调用失败"), **result}
     if payload.area == "storage":
+        search = app.state.core.search_index.status(probe=True)
+        events = app.state.core.event_stream.status(probe=True)
         vector = (
             app.state.core.vector_store.status(probe=True)
             if app.state.core.vector_store is not None
@@ -1484,15 +1506,22 @@ def test_runtime_settings(payload: SettingsTestRequest) -> dict:
             }
         )
         graph = app.state.core.capabilities.knowledge_graph.status(probe=True)
-        ok = bool(vector.get("ok")) and bool(graph.get("ok"))
+        ok = (
+            bool(search.get("ok"))
+            and bool(events.get("ok"))
+            and bool(vector.get("ok"))
+            and bool(graph.get("ok"))
+        )
         return {
             "ok": ok,
             "area": "storage",
             "message": (
-                "关系事实库、向量索引与知识图谱检查通过。"
+                "PostgreSQL、Elasticsearch、Kafka、向量与图谱检查通过。"
                 if ok
-                else "数据后端连接失败，请检查 Milvus 或 Neo4j 配置。"
+                else "数据后端连接失败，请检查 PostgreSQL、Elasticsearch、Kafka、Milvus 或 Neo4j 配置。"
             ),
+            "search": search,
+            "events": events,
             "vector": vector,
             "graph": graph,
         }
@@ -1817,6 +1846,41 @@ def memory_search(session_id: str = "default", query: str = "") -> list[dict]:
         hit.as_dict()
         for hit in app.state.core.memory_retriever.search(session_id, query, limit=20)
     ]
+
+
+@app.post("/api/knowledge/documents")
+def ingest_knowledge_document(payload: KnowledgeDocumentRequest) -> dict:
+    if not payload.confirmed:
+        raise HTTPException(status_code=400, detail="写入知识库需要明确确认。")
+    return app.state.core.knowledge_base.ingest_text(
+        payload.knowledge_base,
+        title=payload.title,
+        text=payload.text,
+        source_uri=payload.source_uri,
+        metadata_json=json.dumps(payload.metadata, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
+@app.get("/api/knowledge/search")
+def search_knowledge(knowledge_base: str, query: str, limit: int = 20) -> list[dict]:
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", knowledge_base):
+        raise HTTPException(status_code=422, detail="knowledge_base 格式无效。")
+    if not query.strip():
+        return []
+    return app.state.core.knowledge_base.search(
+        knowledge_base, query, limit=max(1, min(limit, 100))
+    )
+
+
+@app.post("/api/knowledge/documents/delete")
+def delete_knowledge_document(payload: KnowledgeDocumentDeleteRequest) -> dict:
+    if not payload.confirmed:
+        raise HTTPException(status_code=400, detail="删除知识库文档需要明确确认。")
+    return {
+        "ok": app.state.core.knowledge_base.delete_document(
+            payload.knowledge_base, payload.document_id
+        )
+    }
 
 
 @app.post("/api/memory/forget")
@@ -2293,16 +2357,27 @@ async def channel_message(
 async def runtime_socket(websocket: WebSocket) -> None:
     await websocket.accept()
     subscriptions: dict[str, int] = {}
+    event_notifications = app.state.core.event_stream.subscribe_local(
+        asyncio.get_running_loop()
+    )
     try:
         await websocket.send_json({"event": "ready", "status": app.state.core.status()})
         while True:
-            try:
-                message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=0.35,
-                )
-            except TimeoutError:
-                message = ""
+            receive_task = asyncio.create_task(websocket.receive_text())
+            notification_task = asyncio.create_task(event_notifications.get())
+            done, pending = await asyncio.wait(
+                {receive_task, notification_task},
+                timeout=5.0,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            message = receive_task.result() if receive_task in done else ""
+            notified_task = (
+                notification_task.result() if notification_task in done else ""
+            )
             if message == "ping":
                 await websocket.send_json({"event": "pong"})
             elif message == "status":
@@ -2345,7 +2420,13 @@ async def runtime_socket(websocket: WebSocket) -> None:
                     await websocket.send_json(
                         {"event": "ignored", "message": message[:80]}
                     )
-            for task_id, cursor in list(subscriptions.items()):
+            replay_tasks = (
+                [notified_task]
+                if notified_task and notified_task in subscriptions and not message
+                else list(subscriptions)
+            )
+            for task_id in replay_tasks:
+                cursor = subscriptions[task_id]
                 events = app.state.core.agent_tasks.events(
                     task_id,
                     after_id=cursor,
@@ -2367,6 +2448,8 @@ async def runtime_socket(websocket: WebSocket) -> None:
                 )
     except WebSocketDisconnect:
         return
+    finally:
+        app.state.core.event_stream.unsubscribe_local(event_notifications)
 
 
 @app.post("/api/memory/clear")

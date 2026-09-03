@@ -13,7 +13,7 @@ from typing import Any
 from service_club.storage.contracts import BackgroundJobRepository
 from service_club.storage.relational import (
     RelationalBackend,
-    SQLiteRelationalBackend,
+    configured_relational_backend,
 )
 
 TERMINAL_JOB_STATUSES = {"completed", "cancelled", "dead_letter"}
@@ -45,8 +45,8 @@ class BackgroundJobStore:
     """Durable leased work queue shared by web and recovery workers."""
 
     # 作用：绑定关系型存储并初始化后台作业账本。
-    # 参数 db_path：使用 SQLite 时的数据库文件路径。
-    # 参数 backend：可选的关系型存储后端；未提供时使用 SQLite。
+    # 参数 db_path：旧版路径参数，运行时不使用。
+    # 参数 backend：可选的关系型存储后端；未提供时读取 PostgreSQL 配置。
     def __init__(
         self,
         db_path: str | Path | None = None,
@@ -54,9 +54,7 @@ class BackgroundJobStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if db_path is None:
-                raise ValueError("SQLite 后台队列需要数据库路径。")
-            backend = SQLiteRelationalBackend(db_path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.db_path = Path(db_path) if db_path is not None else None
         self.init()
@@ -90,25 +88,13 @@ class BackgroundJobStore:
                 )
                 """
             )
-            if self.backend.name == "sqlite":
-                job_columns = {
-                    str(row[1])
-                    for row in conn.execute("PRAGMA table_info(background_jobs)")
-                }
-                for column in ("task_id", "related_task_id"):
-                    if column in job_columns:
-                        continue
-                    conn.execute(
-                        f"ALTER TABLE background_jobs ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
-                    )
-            else:
-                for column in ("task_id", "related_task_id"):
-                    conn.execute(
-                        f"""
-                        ALTER TABLE background_jobs
-                        ADD COLUMN IF NOT EXISTS {column} TEXT NOT NULL DEFAULT ''
-                        """
-                    )
+            for column in ("task_id", "related_task_id"):
+                conn.execute(
+                    f"""
+                    ALTER TABLE background_jobs
+                    ADD COLUMN IF NOT EXISTS {column} TEXT NOT NULL DEFAULT ''
+                    """
+                )
             conn.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_background_jobs_dedupe

@@ -10,10 +10,14 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from service_club.core.runtime.event_stream import (
+    append_outbox_event,
+    ensure_event_outbox_schema,
+)
 from service_club.storage.relational import (
     RelationalBackend,
     RelationalConnection,
-    SQLiteRelationalBackend,
+    configured_relational_backend,
 )
 
 _CURRENT_TASK_ID: ContextVar[str] = ContextVar("agi_yukino_agent_task_id", default="")
@@ -102,8 +106,8 @@ class AgentTaskStore:
     }
 
     # 作用：绑定关系型后端并初始化完整任务账本结构。
-    # 参数 db_path：使用 SQLite 时的数据库文件路径。
-    # 参数 backend：可选的关系型存储后端；未提供时使用 SQLite。
+    # 参数 db_path：旧版路径参数，运行时不使用。
+    # 参数 backend：可选的关系型存储后端；未提供时读取 PostgreSQL 配置。
     def __init__(
         self,
         db_path: str | Path | None = None,
@@ -111,9 +115,7 @@ class AgentTaskStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if db_path is None:
-                raise ValueError("SQLite Agent 任务账本需要数据库路径。")
-            backend = SQLiteRelationalBackend(db_path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.db_path = Path(db_path) if db_path is not None else None
         self._ensure_schema()
@@ -233,8 +235,9 @@ class AgentTaskStore:
                 ON agent_task_events(task_id, id)
                 """
             )
+            ensure_event_outbox_schema(conn)
 
-    # 作用：兼容 SQLite 与其他关系库，为旧表补齐新增字段。
+    # 作用：为旧 PostgreSQL 表补齐新增字段。
     # 参数 connection：用于执行表结构迁移的数据库连接。
     # 参数 table：需要检查并迁移的数据表名称。
     # 参数 additions：待补充字段名与数据库类型定义的映射。
@@ -244,17 +247,6 @@ class AgentTaskStore:
         table: str,
         additions: dict[str, str],
     ) -> None:
-        if self.backend.name == "sqlite":
-            columns = {
-                str(row[1])
-                for row in connection.execute(f"PRAGMA table_info({table})")
-            }
-            for column, definition in additions.items():
-                if column not in columns:
-                    connection.execute(
-                        f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
-                    )
-            return
         for column, definition in additions.items():
             connection.execute(
                 f"""
@@ -1661,6 +1653,24 @@ class AgentTaskStore:
             if inserted is None:
                 raise RuntimeError("Agent 事件创建失败。")
             event_id = int(inserted["id"])
+            append_outbox_event(
+                conn,
+                event_type=f"agent_task.{event[:80]}",
+                aggregate_type="agent_task",
+                aggregate_id=task_id,
+                partition_key=task_id,
+                payload={
+                    "cursor": event_id,
+                    "task_id": task_id,
+                    "status": status[:80],
+                    "phase": phase[:80],
+                    "step_id": step_id,
+                    "action": action[:100],
+                    "detail": detail[:500],
+                    "payload": safe_payload if encoded != "{}" or not safe_payload else {},
+                    "created_at": now,
+                },
+            )
         return {
             "id": event_id,
             "task_id": task_id,

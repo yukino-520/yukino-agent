@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from service_club.storage.relational import RelationalBackend, SQLiteRelationalBackend
+from service_club.storage.relational import RelationalBackend, configured_relational_backend
 
 
 # 作用：携带 HTTP 状态码的入站通道认证或防重放异常。
@@ -34,8 +34,8 @@ class InboundChannelSecurity:
     signature_header = "X-AGI-Yukino-Signature"
 
     # 作用：配置签名时钟与有效时间窗，并初始化防重放账本。
-    # 参数 db_path：使用 SQLite 时的数据库文件路径。
-    # 参数 backend：可选的关系型存储后端；未提供时使用 SQLite。
+    # 参数 db_path：旧版路径参数，运行时不使用。
+    # 参数 backend：可选的关系型存储后端；未提供时读取 PostgreSQL 配置。
     # 参数 clock：可替换的时钟函数，便于控制过期和熔断时间。
     # 参数 max_age_seconds：入站签名允许偏离当前时间的最大秒数。
     def __init__(
@@ -47,9 +47,7 @@ class InboundChannelSecurity:
         max_age_seconds: int = 300,
     ) -> None:
         if backend is None:
-            if db_path is None:
-                raise ValueError("SQLite 入站防重账本需要数据库路径。")
-            backend = SQLiteRelationalBackend(db_path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.db_path = Path(db_path) if db_path is not None else None
         self.clock = clock

@@ -116,6 +116,14 @@ class ServiceClubDoctor:
                 for name, repository in repositories.items()
             },
         }
+        status["search"] = self.core.search_index.status(probe=True)
+        status["events"] = self.core.event_stream.status(probe=True)
+        status["knowledge_base"] = self.core.knowledge_base.status()
+        status["ok"] = bool(
+            status.get("ok", True)
+            and status["search"].get("ok")
+            and status["events"].get("ok")
+        )
         return status
 
     # 作用：获取永久记忆服务的可用状态。

@@ -11,10 +11,8 @@ from typing import Sequence
 from service_club.core.agent import ServiceClubCore
 from service_club.core.runtime.doctor import ServiceClubDoctor
 from service_club.core.types import ChatMessage, ChatRequest
-from service_club.settings import settings
 from service_club.storage.control_plane_migration import migrate_control_plane
 from service_club.storage.relational import PostgresRelationalBackend, RelationalBackendUnavailable
-from service_club.storage.sqlite import sqlite_status
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,7 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     storage = subcommands.add_parser("storage", help="检查或迁移持久存储")
     storage_commands = storage.add_subparsers(dest="storage_command")
-    storage_status = storage_commands.add_parser("status", help="检查本机 SQLite")
+    storage_status = storage_commands.add_parser("status", help="检查 PostgreSQL、Elasticsearch 与 Kafka")
     storage_status.add_argument("--json", action="store_true", dest="json_output")
     migrate = storage_commands.add_parser(
         "migrate-control-plane",
@@ -71,6 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     migrate.add_argument("--dry-run", action="store_true")
     migrate.add_argument("--confirmed", action="store_true")
+    migrate.add_argument("--source-sqlite", required=True, type=Path)
     migrate.add_argument("--json", action="store_true", dest="json_output")
     vector_status = storage_commands.add_parser(
         "vector-status", help="检查 Milvus / pgvector 检索后端"
@@ -82,6 +81,14 @@ def _build_parser() -> argparse.ArgumentParser:
     vector_rebuild.add_argument("--drop-existing", action="store_true")
     vector_rebuild.add_argument("--confirmed", action="store_true")
     vector_rebuild.add_argument("--json", action="store_true", dest="json_output")
+    search_status = storage_commands.add_parser(
+        "search-status", help="检查 Elasticsearch 记忆与文档索引"
+    )
+    search_status.add_argument("--json", action="store_true", dest="json_output")
+    search_rebuild = storage_commands.add_parser(
+        "rebuild-search", help="从 PostgreSQL 重建 Elasticsearch 记忆与文档索引"
+    )
+    search_rebuild.add_argument("--json", action="store_true", dest="json_output")
     graph_status = storage_commands.add_parser(
         "graph-status", help="检查关系图谱和 Neo4j 投影"
     )
@@ -118,30 +125,34 @@ def _serve(host: str, port: int, reload: bool) -> int:
 # 参数 session_id：隔离会话数据、权限和任务的会话标识。
 def _chat(character: str, club: bool, session_id: str) -> int:
     core = ServiceClubCore()
+    core.start_data_plane()
     history: list[ChatMessage] = []
     mode = "club" if club else "solo"
     print("\n放学后的侍奉部活动室。输入 /exit 离开。\n")
-    while True:
-        try:
-            text = input("你 › ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if text in {"/exit", "/quit", "退出"}:
-            break
-        if not text:
-            continue
-        history.append(ChatMessage(role="user", content=text))
-        reply = core.process(
-            ChatRequest(
-                messages=history[-24:],
-                chat_mode=mode,
-                character=character,
-                session_id=session_id,
+    try:
+        while True:
+            try:
+                text = input("你 › ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if text in {"/exit", "/quit", "退出"}:
+                break
+            if not text:
+                continue
+            history.append(ChatMessage(role="user", content=text))
+            reply = core.process(
+                ChatRequest(
+                    messages=history[-24:],
+                    chat_mode=mode,
+                    character=character,
+                    session_id=session_id,
+                )
             )
-        )
-        history.append(ChatMessage(role="assistant", content=reply.content))
-        print(f"{reply.character} › {reply.content}\n")
+            history.append(ChatMessage(role="assistant", content=reply.content))
+            print(f"{reply.character} › {reply.content}\n")
+    finally:
+        core.stop_data_plane()
     return 0
 
 
@@ -174,10 +185,18 @@ def _usage(days: int, json_output: bool) -> int:
     return 0
 
 
-# 作用：检查本机 SQLite 的 WAL、外键和容量状态。
+# 作用：检查生产存储和事件流状态。
 # 参数 json_output：是否以机器可读 JSON 格式输出报告。
 def _storage_status(json_output: bool) -> int:
-    report = sqlite_status(settings.database_path)
+    core = ServiceClubCore()
+    report = {
+        "ok": core.memory.backend.name == "postgresql",
+        "backend": core.memory.backend.name,
+        "location": core.memory.backend.location,
+        "search": core.search_index.status(probe=True),
+        "events": core.event_stream.status(probe=True),
+    }
+    report["ok"] = bool(report["ok"] and report["search"].get("ok"))
     if json_output:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
@@ -185,8 +204,8 @@ def _storage_status(json_output: bool) -> int:
         print(f"AGI Yukino storage: {marker}")
         print(
             f"  backend={report.get('backend')} "
-            f"journal={report.get('journal_mode', 'unknown')} "
-            f"tables={report.get('table_count', 0)}"
+            f"search={report['search'].get('backend')} "
+            f"events={report['events'].get('backend')}"
         )
     return 0 if report.get("ok") else 1
 
@@ -197,6 +216,7 @@ def _storage_status(json_output: bool) -> int:
 # 参数 json_output：是否以机器可读 JSON 格式输出报告。
 def _migrate_control_plane(
     *,
+    source_sqlite: Path,
     dry_run: bool,
     confirmed: bool,
     json_output: bool,
@@ -210,7 +230,7 @@ def _migrate_control_plane(
         return 2
     try:
         report = migrate_control_plane(
-            settings.database_path,
+            source_sqlite,
             PostgresRelationalBackend(dsn),
             dry_run=dry_run,
         )
@@ -266,6 +286,25 @@ def _vector_status(json_output: bool) -> int:
         }
     )
     return _print_storage_adapter(report, label="vector", json_output=json_output)
+
+
+def _search_status(json_output: bool) -> int:
+    core = ServiceClubCore()
+    return _print_storage_adapter(
+        core.search_index.status(probe=True), label="search", json_output=json_output
+    )
+
+
+def _rebuild_search(json_output: bool) -> int:
+    core = ServiceClubCore()
+    memories = core.search_index.bulk_rebuild_memories(
+        core.memory.iter_memories(), replace=True
+    )
+    documents = core.search_index.bulk_rebuild_documents(
+        core.knowledge_base.iter_chunks(), replace=True
+    )
+    report = {"ok": True, "backend": "elasticsearch", "memories": memories, "document_chunks": documents}
+    return _print_storage_adapter(report, label="search rebuild", json_output=json_output)
 
 
 # 作用：按确认策略从关系事实库重建派生向量索引。
@@ -327,6 +366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _storage_status(args.json_output)
         if args.storage_command == "migrate-control-plane":
             return _migrate_control_plane(
+                source_sqlite=args.source_sqlite,
                 dry_run=args.dry_run,
                 confirmed=args.confirmed,
                 json_output=args.json_output,
@@ -339,6 +379,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 confirmed=args.confirmed,
                 json_output=args.json_output,
             )
+        if args.storage_command == "search-status":
+            return _search_status(args.json_output)
+        if args.storage_command == "rebuild-search":
+            return _rebuild_search(args.json_output)
         if args.storage_command == "graph-status":
             return _graph_status(args.json_output)
         if args.storage_command == "rebuild-graph":

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from service_club.storage.relational import RelationalBackend, SQLiteRelationalBackend
+from service_club.storage.relational import RelationalBackend, configured_relational_backend
 
 
 # 作用：记录已确认外部调用的发送阶段与供应商幂等键，禁止未知终态自动重放。
@@ -16,8 +16,8 @@ class ExternalDispatchStore:
     """Structural ledger for confirmed calls that can leave this process."""
 
     # 作用：绑定关系型后端并初始化外发结构化账本。
-    # 参数 db_path：使用 SQLite 时的数据库文件路径。
-    # 参数 backend：可选的关系型存储后端；未提供时使用 SQLite。
+    # 参数 db_path：旧版路径参数，运行时不使用。
+    # 参数 backend：可选的关系型存储后端；未提供时读取 PostgreSQL 配置。
     def __init__(
         self,
         db_path: str | Path | None = None,
@@ -25,9 +25,7 @@ class ExternalDispatchStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if db_path is None:
-                raise ValueError("SQLite 外发账本需要数据库路径。")
-            backend = SQLiteRelationalBackend(db_path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.db_path = Path(db_path) if db_path is not None else None
         self._ensure_schema()

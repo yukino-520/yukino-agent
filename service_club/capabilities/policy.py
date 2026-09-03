@@ -8,7 +8,7 @@ from typing import Any
 
 from service_club.storage.relational import (
     RelationalBackend,
-    SQLiteRelationalBackend,
+    configured_relational_backend,
 )
 
 
@@ -39,9 +39,7 @@ class CapabilityPolicyStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if path is None:
-                raise ValueError("SQLite 权限仓库需要数据库路径。")
-            backend = SQLiteRelationalBackend(path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.path = Path(path) if path is not None else None
         self._ensure_schema()

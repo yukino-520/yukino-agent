@@ -60,9 +60,7 @@ from service_club.core.runtime.network_resilience import (
 )
 from service_club.settings import PROJECT_ROOT
 from service_club.storage.contracts import CapabilityPolicyRepository
-from service_club.storage.migrations import consolidate_legacy_databases
-from service_club.storage.relational import RelationalBackend, SQLiteRelationalBackend
-from service_club.storage.sqlite import sqlite_status
+from service_club.storage.relational import RelationalBackend, configured_relational_backend
 
 
 # 作用：表示能力参数、确认或外部调用不满足网关约束。
@@ -136,10 +134,8 @@ class CapabilityHub:
         self.mcp_catalog = McpToolCatalog(self.data_dir / "mcp_tool_catalog.json")
         self.mcp_stdio = McpStdioClient()
         self.state = JsonStateStore(self.data_dir / "capability_state.json")
-        self.database_path = Path(
-            database_path or self.data_dir / "service_club.sqlite3"
-        ).resolve()
-        self.backend = backend or SQLiteRelationalBackend(self.database_path)
+        self.database_path = Path(database_path).resolve() if database_path else None
+        self.backend = backend or configured_relational_backend()
         self.knowledge_graph = KnowledgeGraphStore(
             self.backend,
             projector=configured_graph_projector(),
@@ -158,21 +154,14 @@ class CapabilityHub:
         self.permission_policy: CapabilityPolicyRepository = CapabilityPolicyStore(
             backend=self.backend
         )
-        self.storage_migration = (
-            consolidate_legacy_databases(self.data_dir, self.database_path)
-            if migrate_legacy and self.backend.name == "sqlite"
-            else {
-                "target": self.backend.location,
-                "sources": [],
-                "copied_rows": 0,
-                "legacy_files_preserved": True,
-                "skipped": (
-                    "non_sqlite_backend"
-                    if self.backend.name != "sqlite"
-                    else "custom_memory_store"
-                ),
-            }
-        )
+        del migrate_legacy
+        self.storage_migration = {
+            "target": self.backend.location,
+            "sources": [],
+            "copied_rows": 0,
+            "legacy_files_preserved": True,
+            "skipped": "postgresql_runtime",
+        }
         gateway_ids = {
             "tool_search",
             "workspace",
@@ -331,15 +320,11 @@ class CapabilityHub:
     # 作用：报告事实库、派生存储及各能力仓储实际使用的后端。
     # 参数：无。
     def storage_status(self) -> dict[str, Any]:
-        backend_status = (
-            sqlite_status(self.database_path)
-            if self.backend.name == "sqlite"
-            else {
-                "ok": True,
-                "backend": self.backend.name,
-                "location": self.backend.location,
-            }
-        )
+        backend_status = {
+            "ok": True,
+            "backend": self.backend.name,
+            "location": self.backend.location,
+        }
         return {
             **backend_status,
             "migration": self.storage_migration,
@@ -355,8 +340,8 @@ class CapabilityHub:
                 ),
             },
             "knowledge_graph": self.knowledge_graph.status(),
-            "production_target": "postgresql+pgvector",
-            "scale_out_profile": "postgresql+milvus+neo4j",
+            "production_target": "postgresql+elasticsearch+kafka",
+            "scale_out_profile": "postgresql+elasticsearch+kafka+milvus+neo4j",
             "postgres_runtime_switch_ready": True,
             "redis_role": "ephemeral_coordination_only",
             "milvus_role": "derived_semantic_index",

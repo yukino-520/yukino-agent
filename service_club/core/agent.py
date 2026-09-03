@@ -29,11 +29,13 @@ from service_club.core.memory.context_window import ContextWindowManager
 from service_club.core.memory.conversations import ConversationStore
 from service_club.core.memory.embeddings import OpenAIEmbeddingProvider
 from service_club.core.memory.hybrid_retrieval import HybridMemoryRetriever
+from service_club.core.memory.knowledge_base import KnowledgeBaseStore
 from service_club.core.memory.memory_consolidation import MemoryConsolidator
 from service_club.core.memory.permanent_memory import PermanentMemoryManager
 from service_club.core.memory.profile_facts import ProfileFactLearner
 from service_club.core.memory.reflection import TurnReflectionEngine
 from service_club.core.memory.reunion import ReunionPlanner
+from service_club.core.memory.search_index import configured_search_index
 from service_club.core.memory.spontaneous_recall import SpontaneousRecallEngine
 from service_club.core.memory.user_profile import UserProfileSynthesizer
 from service_club.core.memory.vector_store import configured_vector_store
@@ -46,6 +48,7 @@ from service_club.core.runtime.agent_task_store import (
 from service_club.core.runtime.attachment_store import AttachmentStore
 from service_club.core.runtime.background_jobs import BackgroundJobStore
 from service_club.core.runtime.concurrency_gate import RuntimeConcurrencyGate
+from service_club.core.runtime.event_stream import KafkaOutboxDispatcher
 from service_club.core.runtime.execution_contract import AgentExecutionPlanner
 from service_club.core.runtime.outcome_verifier import AgentOutcomeVerifier
 from service_club.core.runtime.runtime_degradation import RuntimeDegradationMonitor
@@ -97,10 +100,12 @@ class ServiceClubCore:
         self.model = model or ServiceClubModel(self.usage)
         self.output_security = ToolOutputSecurity()
         self.memory = memory or MemoryManager(
-            settings.database_path,
-            backend=configured_relational_backend(settings.database_path),
+            backend=configured_relational_backend(),
         )
         self.memory.init()
+        self.search_index = configured_search_index()
+        self.memory.bind_search_index(self.search_index)
+        self.knowledge_base = KnowledgeBaseStore(self.memory.backend, self.search_index)
         self.vector_store = configured_vector_store(settings.data_dir)
         self.memory.bind_vector_store(self.vector_store)
         self.agent_requests: AgentRequestRepository = AgentRequestStore(
@@ -134,6 +139,10 @@ class ServiceClubCore:
             self.memory,
             embedding_provider=self.embedding_provider,
             vector_store=self.vector_store,
+            search_index=self.search_index,
+        )
+        self.event_stream = KafkaOutboxDispatcher(
+            self.memory.backend, projector=self.search_index.project_event
         )
         self.profile_fact_learner = ProfileFactLearner(self.memory)
         self.intent_decomposer = IntentDecomposer()
@@ -200,6 +209,18 @@ class ServiceClubCore:
         self.club_orchestrator = ClubOrchestrator(self.character_agents)
         self.sticker_base = Path(sticker_base or settings.sticker_dir)
 
+    def start_data_plane(self) -> None:
+        """Fail closed unless required search and event services are reachable."""
+        self.search_index.ensure_indices()
+        kafka = self.event_stream.status(probe=True)
+        if not kafka.get("ok"):
+            raise RuntimeError(f"Kafka 不可用：{kafka.get('last_error', 'unknown error')}")
+        self.event_stream.start()
+
+    def stop_data_plane(self) -> None:
+        self.event_stream.stop()
+        self.search_index.close()
+
     # 作用：在并发安全边界内重建依赖环境配置的模型与外部能力适配器。
     # 参数 before_reload：可选回调，在替换外部适配器前执行准备或校验逻辑。
     def reload_external_configuration(
@@ -233,6 +254,7 @@ class ServiceClubCore:
                 self.memory,
                 embedding_provider=embedding_provider,
                 vector_store=vector_store,
+                search_index=self.search_index,
                 knowledge_graph=capabilities.knowledge_graph,
             )
             previous_vector_store = self.vector_store
@@ -1401,6 +1423,8 @@ class ServiceClubCore:
             "behavior_instincts": self.behavior_instincts.status(),
             "context_window": self.context_window.status(),
             "memory_retrieval": self.memory_retriever.status(),
+            "event_stream": self.event_stream.status(),
+            "knowledge_base": self.knowledge_base.status(),
             "profile_facts": self.profile_fact_learner.status(),
             "response_quality": self.response_quality_guard.status(),
             "interaction_learning": self.interaction_outcomes.status(),

@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from service_club.storage.relational import RelationalBackend, SQLiteRelationalBackend
+from service_club.storage.relational import RelationalBackend, configured_relational_backend
 
 
 # 作用：表示附件名称、格式、大小、归属或完整性不符合安全约束。
@@ -41,9 +41,9 @@ class AttachmentStore:
     IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 
     # 作用：绑定元数据后端与文件根目录，并初始化附件索引表。
-    # 参数 db_path：使用 SQLite 时的数据库文件路径。
+    # 参数 db_path：旧版路径参数，运行时不使用。
     # 参数 root：附件文件实际保存的受控根目录。
-    # 参数 backend：可选的关系型存储后端；未提供时使用 SQLite。
+    # 参数 backend：可选的关系型存储后端；未提供时读取 PostgreSQL 配置。
     def __init__(
         self,
         db_path: str | Path | None = None,
@@ -52,9 +52,7 @@ class AttachmentStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if db_path is None:
-                raise ValueError("SQLite 附件元数据需要数据库路径。")
-            backend = SQLiteRelationalBackend(db_path)
+            backend = configured_relational_backend()
         if root is None:
             raise ValueError("附件存储目录不能为空。")
         self.backend = backend

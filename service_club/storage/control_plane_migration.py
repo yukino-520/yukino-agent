@@ -19,9 +19,9 @@ from service_club.core.runtime.channel_security import InboundChannelSecurity
 from service_club.core.runtime.effect_receipts import EffectReceiptStore
 from service_club.core.runtime.external_dispatch_store import ExternalDispatchStore
 from service_club.core.tooling.operation_store import AgentOperationStore
+from service_club.storage.legacy_sqlite import SQLiteRelationalBackend
 from service_club.storage.relational import (
     RelationalBackend,
-    SQLiteRelationalBackend,
 )
 
 _TABLES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
@@ -534,7 +534,7 @@ def migrate_control_plane(
         backend=destination,
         root=source_path.parent / "workspace" / "attachments",
     )
-    destination_memory = MemoryManager("unused.sqlite3", backend=destination)
+    destination_memory = MemoryManager(backend=destination)
     destination_memory.init()
     PermanentMemoryManager(
         source_path.parent,

@@ -13,7 +13,7 @@ from service_club.storage.contracts import WorkflowRunRepository
 from service_club.storage.relational import (
     RelationalBackend,
     RelationalConnection,
-    SQLiteRelationalBackend,
+    configured_relational_backend,
 )
 
 
@@ -41,9 +41,7 @@ class WorkflowRunStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if path is None:
-                raise ValueError("SQLite 工作流仓库需要数据库路径。")
-            backend = SQLiteRelationalBackend(path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.path = Path(path) if path is not None else None
         self._lock = threading.RLock()

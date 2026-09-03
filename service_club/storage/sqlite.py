@@ -31,12 +31,7 @@ def _bounded_int(name: str, default: int, minimum: int, maximum: int) -> int:
 # 作用：执行“sqlite_connection”对应的内部处理步骤，完成输入转换、状态处理并返回约定结果。
 # 参数 path：配置文件、数据文件或工作区路径。
 def sqlite_connection(path: str | Path) -> Iterator[sqlite3.Connection]:
-    """Open a bounded, WAL-backed SQLite transaction and always close it.
-
-    SQLite remains the zero-configuration local backend.  Keeping connection
-    policy here prevents each repository from silently choosing different
-    locking, durability, and foreign-key behavior.
-    """
+    """Open a legacy SQLite file for the offline PostgreSQL import command only."""
 
     database_path = Path(path)
     database_path.parent.mkdir(parents=True, exist_ok=True)

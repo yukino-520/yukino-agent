@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from service_club.storage.relational import RelationalBackend, SQLiteRelationalBackend
+from service_club.storage.relational import RelationalBackend, configured_relational_backend
 
 
 # 作用：持久化本地副作用的结构化回执，供崩溃恢复时判断是否已真实生效。
@@ -15,8 +15,8 @@ class EffectReceiptStore:
     """Durable structural receipts for reconciling local side effects after a crash."""
 
     # 作用：绑定关系型后端并初始化副作用回执表。
-    # 参数 db_path：使用 SQLite 时的数据库文件路径。
-    # 参数 backend：可选的关系型存储后端；未提供时使用 SQLite。
+    # 参数 db_path：旧版路径参数，运行时不使用。
+    # 参数 backend：可选的关系型存储后端；未提供时读取 PostgreSQL 配置。
     def __init__(
         self,
         db_path: str | Path | None = None,
@@ -24,9 +24,7 @@ class EffectReceiptStore:
         backend: RelationalBackend | None = None,
     ) -> None:
         if backend is None:
-            if db_path is None:
-                raise ValueError("SQLite 副作用回执需要数据库路径。")
-            backend = SQLiteRelationalBackend(db_path)
+            backend = configured_relational_backend()
         self.backend = backend
         self.db_path = Path(db_path) if db_path is not None else None
         self._ensure_schema()

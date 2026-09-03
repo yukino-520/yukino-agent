@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import os
 import re
-import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
-
-from service_club.storage.sqlite import sqlite_connection
 
 
 # 作用：表示已配置的关系数据库驱动或连接后端不可用。
@@ -17,7 +13,7 @@ class RelationalBackendUnavailable(RuntimeError):
     pass
 
 
-# 作用：统一 SQLite 与 PostgreSQL 的占位符和建表语法差异。
+# 作用：统一领域仓储与 PostgreSQL 驱动的占位符和建表语法差异。
 # 参数：无。
 class RelationalConnection:
     """Small DB-API compatibility surface used by domain repositories."""
@@ -105,76 +101,6 @@ class RelationalBackend(Protocol):
         table: str,
         column: str,
     ) -> None: ...
-
-
-# 作用：实现零配置本地 SQLite 关系存储适配器。
-# 参数：无。
-class SQLiteRelationalBackend:
-    name = "sqlite"
-    float_type = "REAL"
-    identity_type = "INTEGER PRIMARY KEY AUTOINCREMENT"
-
-    # 作用：解析 SQLite 文件路径并公开后端位置。
-    # 参数 path：目标文件、数据库或状态存储路径。
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path).resolve()
-        self.location = str(self.path)
-
-    # 作用：打开统一配置的 SQLite 事务并按需抢占写锁。
-    # 参数 immediate：是否在事务开始时立即取得写入锁。
-    @contextmanager
-    # 作用：执行“connect”对应的内部处理步骤，完成输入转换、状态处理并返回约定结果。
-    # 参数 immediate：调用方传入的immediate，用于本次处理。
-    # 作用：执行“connect”对应的内部处理步骤，完成输入转换、状态处理并返回约定结果。
-    # 参数 immediate：调用方传入的immediate，用于本次处理。
-    def connect(self, *, immediate: bool = False) -> Iterator[RelationalConnection]:
-        with sqlite_connection(self.path) as raw:
-            raw.row_factory = sqlite3.Row
-            if immediate:
-                raw.execute("BEGIN IMMEDIATE")
-            yield RelationalConnection(raw, placeholder="?")
-
-    # 作用：保留锁作用域接口；SQLite 由事务级写锁统一串行化。
-    # 参数 connection：当前事务使用的关系数据库连接。
-    # 参数 scope：需要在事务内串行化的业务锁作用域。
-    def lock_scope(
-        self,
-        connection: RelationalConnection,
-        scope: str,
-    ) -> None:
-        del connection, scope
-
-    # 作用：返回空后缀，因为 SQLite 不支持 SELECT FOR UPDATE。
-    # 参数 skip_locked：查询行锁时是否跳过已被其他事务锁定的记录。
-    def for_update(self, *, skip_locked: bool = False) -> str:
-        del skip_locked
-        return ""
-
-    # 作用：通过 sqlite_master 检查数据表是否存在。
-    # 参数 connection：当前事务使用的关系数据库连接。
-    # 参数 table：要查询、迁移或维护的数据表名称。
-    def table_exists(
-        self,
-        connection: RelationalConnection,
-        table: str,
-    ) -> bool:
-        row = connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table,),
-        ).fetchone()
-        return row is not None
-
-    # 作用：保留迁移接口；SQLite 的冲突忽略写入无需额外重置。
-    # 参数 connection：当前事务使用的关系数据库连接。
-    # 参数 table：要查询、迁移或维护的数据表名称。
-    # 参数 column：要检查或重置的数据库列名。
-    def reseed_identity(
-        self,
-        connection: RelationalConnection,
-        table: str,
-        column: str,
-    ) -> None:
-        del connection, table, column
 
 
 # 作用：实现支持行锁和顾问锁的 PostgreSQL 关系存储适配器。
@@ -289,30 +215,22 @@ def _bounded_timeout() -> int:
     return max(1, min(value, 30))
 
 
-# 作用：根据进程配置选择统一的 SQLite 或 PostgreSQL 事实存储。
-# 参数 sqlite_path：未配置远端数据库时使用的 SQLite 文件路径。
+# 作用：从进程配置创建唯一允许的 PostgreSQL 事实存储。
 # 参数 database_url：显式指定的关系数据库 URL；为空时读取环境配置。
 def configured_relational_backend(
-    sqlite_path: str | Path,
     *,
     database_url: str | None = None,
 ) -> RelationalBackend:
-    """Resolve one fact-store backend for the whole process.
-
-    PostgreSQL is opt-in so a desktop installation stays zero-configuration.
-    A configured but invalid URL fails closed instead of silently splitting
-    writes between PostgreSQL and SQLite.
-    """
+    """Resolve the mandatory PostgreSQL fact store and fail closed."""
     url = (
         os.getenv("YUKINO_DATABASE_URL", "")
         if database_url is None
         else database_url
     ).strip()
     if not url:
-        return SQLiteRelationalBackend(sqlite_path)
+        raise ValueError("缺少 YUKINO_DATABASE_URL；PostgreSQL 是唯一运行时事实库。")
     if url.startswith(("postgresql://", "postgres://")):
         return PostgresRelationalBackend(url)
     raise ValueError(
-        "YUKINO_DATABASE_URL 目前仅支持 postgresql://；"
-        "本地 SQLite 模式请删除该配置。"
+        "YUKINO_DATABASE_URL 仅支持 postgresql:// 或 postgres://。"
     )
