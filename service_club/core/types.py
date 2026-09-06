@@ -36,6 +36,7 @@ ToolAction = Literal[
     "web_search",
     "web_fetch",
     "read_document",
+    "knowledge_search",
     "system_status",
     "add_task",
     "list_tasks",
@@ -130,6 +131,7 @@ class ChatResponse(BaseModel):
     tool_results: list[ToolExecutionResult] = Field(default_factory=list)
     memories_used: list[str] = Field(default_factory=list)
     memory_retrieval: list[dict] = Field(default_factory=list)
+    knowledge_retrieval: list[dict] = Field(default_factory=list)
     trace_id: str = ""
     route_reasoning: str = ""
     route_scorecard: dict = Field(default_factory=dict)

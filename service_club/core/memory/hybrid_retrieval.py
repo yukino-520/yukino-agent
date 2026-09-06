@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 import time
@@ -47,7 +48,7 @@ class MemoryHit:
         }
 
 
-# 作用：在关系事实候选上融合词法、中文片段、概念、向量和一跳图谱评分。
+    # 作用：在关系事实候选上融合词法、中文片段、概念、向量和有界多跳图谱评分。
 # 参数：无。
 class HybridMemoryRetriever:
     """Local hybrid retrieval with an auditable no-embedding fallback."""
@@ -69,6 +70,7 @@ class HybridMemoryRetriever:
         vector_store: Any | None = None,
         search_index: Any | None = None,
         knowledge_graph: Any | None = None,
+        generate_fn: Any | None = None,
         clock=time.time,
     ) -> None:  # noqa: ANN001
         self.store = store
@@ -76,13 +78,64 @@ class HybridMemoryRetriever:
         self.vector_store = vector_store
         self.search_index = search_index
         self.knowledge_graph = knowledge_graph
+        self.generate_fn = generate_fn
         self._clock = clock
 
     # 作用：从关系库取候选并融合各通道排序，派生索引失败时仍可本地降级召回。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
     # 参数 query：用于检索、匹配或遗忘的用户查询文本。
     # 参数 limit：本次查询、返回或格式化允许的最大条数。
-    def search(self, session_id: str, query: str, limit: int = 5) -> list[MemoryHit]:
+    def search(
+        self,
+        session_id: str,
+        query: str,
+        limit: int = 5,
+        *,
+        history: list[dict[str, str]] | None = None,
+    ) -> list[MemoryHit]:
+        if not query.strip():
+            return self._search_once(session_id, query, limit)
+
+        queries = self._rewrite_queries(query, history=history)
+        if len(queries) == 1:
+            hits = self._search_once(session_id, queries[0], limit)
+        else:
+            candidates: dict[int, tuple[MemoryHit, float]] = {}
+            fetch_limit = max(limit * 4, 20)
+            for rewritten in queries:
+                for rank, hit in enumerate(
+                    self._search_once(session_id, rewritten, fetch_limit), start=1
+                ):
+                    rrf = 1.0 / (60 + rank)
+                    previous = candidates.get(hit.id)
+                    if previous is None:
+                        candidates[hit.id] = (hit, rrf)
+                    else:
+                        candidates[hit.id] = (previous[0], previous[1] + rrf)
+            ranked = sorted(
+                candidates.values(),
+                key=lambda item: (item[1], item[0].score),
+                reverse=True,
+            )
+            hits = []
+            for hit, rrf in ranked[: max(limit * 4, limit)]:
+                breakdown = dict(hit.score_breakdown)
+                breakdown["query_rrf"] = round(rrf, 4)
+                hits.append(
+                    MemoryHit(
+                        id=hit.id,
+                        content=hit.content,
+                        source=hit.source,
+                        score=round(hit.score + rrf, 4),
+                        importance=hit.importance,
+                        created_at=hit.created_at,
+                        reasons=[*hit.reasons, "多查询 RRF 融合"],
+                        score_breakdown=breakdown,
+                    )
+                )
+        return self._rerank(query, hits, limit)
+
+    def _search_once(self, session_id: str, query: str, limit: int) -> list[MemoryHit]:
         if not query.strip():
             rows = self.store.list_memory_candidates(session_id, limit=max(limit * 4, 20))
             return self._rank_without_query(rows, limit)
@@ -203,7 +256,101 @@ class HybridMemoryRetriever:
                 )
             )
         hits.sort(key=lambda item: (item.score, item.importance, item.created_at), reverse=True)
+        try:
+            self.store.touch_memories([hit.id for hit in hits[:limit]], now=now)
+        except Exception:
+            pass
         return hits[:limit]
+
+    def _rewrite_queries(
+        self,
+        query: str,
+        *,
+        history: list[dict[str, str]] | None = None,
+    ) -> list[str]:
+        """Use an optional LLM to resolve references and broaden recall."""
+        if self.generate_fn is None or not query.strip():
+            return [query]
+        history_text = ""
+        if history:
+            recent = history[-6:]
+            history_text = "\n最近对话：\n" + "\n".join(
+                f"{item.get('role', 'user')}: {str(item.get('content', ''))[:400]}"
+                for item in recent
+            )
+        prompt = (
+            "将用户问题改写成最多 3 条可独立检索的中文查询。"
+            "保留原意，补全指代和省略，不要回答问题。只输出 JSON："
+            '{"queries":["..."]}。\n用户问题：' + query + history_text
+        )
+        try:
+            raw = self.generate_fn(
+                "你是检索查询改写器，只负责生成检索词。",
+                prompt,
+                temperature=0.0,
+                max_tokens=256,
+            )
+            payload = json.loads(str(raw))
+            values = payload.get("queries", [])
+            queries = [str(value).strip() for value in values if str(value).strip()]
+            return list(dict.fromkeys([query, *queries]))[:3] or [query]
+        except Exception:
+            return [query]
+
+    def _rerank(self, query: str, hits: list[MemoryHit], limit: int) -> list[MemoryHit]:
+        if self.generate_fn is None or len(hits) <= 1:
+            return hits[:limit]
+        candidates = hits[: max(limit * 4, limit)]
+        prompt_lines = ["用户问题：", query, "\n候选记忆："]
+        for index, hit in enumerate(candidates):
+            prompt_lines.append(f"[{index}] {hit.content[:500]}")
+        prompt_lines.append(
+            '\n只输出 JSON：{"scores":[{"idx":0,"score":0}]}。'
+            "score 为 0 到 10 的整数，只依据候选内容判断相关性。"
+        )
+        try:
+            raw = self.generate_fn(
+                "你是记忆检索精排器，只输出合法 JSON。",
+                "\n".join(prompt_lines),
+                temperature=0.0,
+                max_tokens=512,
+            )
+            payload = json.loads(str(raw))
+            scores = {
+                int(item["idx"]): max(0.0, min(10.0, float(item["score"])))
+                for item in payload.get("scores", [])
+                if isinstance(item, dict) and "idx" in item and "score" in item
+            }
+            if not scores:
+                return hits[:limit]
+            ranked = sorted(
+                enumerate(candidates),
+                key=lambda item: (scores.get(item[0], -1.0), item[1].score),
+                reverse=True,
+            )
+            output: list[MemoryHit] = []
+            for index, hit in ranked[:limit]:
+                llm_score = scores.get(index)
+                if llm_score is None:
+                    output.append(hit)
+                    continue
+                breakdown = dict(hit.score_breakdown)
+                breakdown["llm_rerank"] = round(llm_score / 10.0, 4)
+                output.append(
+                    MemoryHit(
+                        id=hit.id,
+                        content=hit.content,
+                        source=hit.source,
+                        score=round(0.7 * (llm_score / 10.0) + 0.3 * hit.score, 4),
+                        importance=hit.importance,
+                        created_at=hit.created_at,
+                        reasons=[*hit.reasons, "LLM 精排"],
+                        score_breakdown=breakdown,
+                    )
+                )
+            return output
+        except Exception:
+            return hits[:limit]
 
     def _semantic_candidates(
         self, session_id: str, query: str, *, limit: int
@@ -301,6 +448,10 @@ class HybridMemoryRetriever:
                 )
             )
         hits.sort(key=lambda item: (item.score, item.created_at), reverse=True)
+        try:
+            self.store.touch_memories([hit.id for hit in hits[:limit]], now=now)
+        except Exception:
+            pass
         return hits[:limit]
 
     # 作用：补齐向量缓存并按 Milvus、数据库向量、进程内余弦的顺序降级打分。
@@ -373,7 +524,7 @@ class HybridMemoryRetriever:
         except Exception:
             return {}
 
-    # 作用：用知识图谱查询得到的种子及一跳节点标签为事实候选提供关联分。
+    # 作用：用知识图谱查询得到的种子及有界多跳节点标签为事实候选提供关联分。
     # 参数 rows：待排序或转换的数据库记录集合。
     # 参数 query：用于检索、匹配或遗忘的用户查询文本。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
@@ -388,15 +539,14 @@ class HybridMemoryRetriever:
         try:
             graph = self.knowledge_graph.search(session_id, query, limit=50)
             seeds = {str(value) for value in graph.get("seed_node_ids", [])}
-            labels = [
-                (
-                    str(node.get("label", "")).strip().casefold(),
-                    1.0 if str(node.get("id", "")) in seeds else 0.62,
-                )
-                for node in graph.get("nodes", [])
-                if str(node.get("label", "")).strip()
-                and str(node.get("type", "")) != "person"
-            ]
+            labels = []
+            for node in graph.get("nodes", []):
+                label = str(node.get("label", "")).strip().casefold()
+                if not label or str(node.get("type", "")) == "person":
+                    continue
+                hop = max(0, int(node.get("hop", 0)))
+                weight = 1.0 if str(node.get("id", "")) in seeds else max(0.35, 0.62 ** hop)
+                labels.append((label, weight))
             scores: dict[int, float] = {}
             for row in rows:
                 content = str(row["content"]).casefold()

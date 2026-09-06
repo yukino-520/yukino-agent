@@ -23,6 +23,10 @@ from service_club.storage.relational import (
 # 作用：统一管理对话、记忆、提醒、关系和学习状态的关系事实，并同步可重建派生索引。
 # 参数：无。
 class MemoryManager:
+    # agi-saber 长期记忆巩固参数：先按时间衰减重要度，再淘汰低价值旧记忆。
+    MEMORY_TTL_DAYS = 30.0
+    MEMORY_DECAY_RATE = 0.995
+    MEMORY_MIN_IMPORTANCE = 0.3
     # 作用：选择关系事实后端并预留向量、知识图谱派生索引绑定点。
     # 参数 db_path：仅为旧调用方保留，不参与 PostgreSQL 连接选择。
     # 参数 backend：关系、向量或图谱后端选择或后端实例。
@@ -131,7 +135,8 @@ class MemoryManager:
                     source TEXT NOT NULL,
                     importance REAL NOT NULL DEFAULT 0.5,
                     idempotency_key TEXT NOT NULL DEFAULT '',
-                    created_at REAL NOT NULL
+                    created_at REAL NOT NULL,
+                    last_accessed REAL NOT NULL
                 )
                 """
             )
@@ -140,6 +145,14 @@ class MemoryManager:
                 conn,
                 "memories",
                 {"idempotency_key": "TEXT NOT NULL DEFAULT ''"},
+            )
+            self._add_missing_columns(
+                conn,
+                "memories",
+                {"last_accessed": "REAL NOT NULL DEFAULT 0"},
+            )
+            conn.execute(
+                "UPDATE memories SET last_accessed = created_at WHERE last_accessed = 0"
             )
             conn.execute(
                 """
@@ -570,10 +583,10 @@ class MemoryManager:
                     """
                     INSERT INTO memories(
                         session_id, content, source, importance,
-                        idempotency_key, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        idempotency_key, created_at, last_accessed
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT DO NOTHING
-                    RETURNING id, session_id, content, source, importance, created_at
+                    RETURNING id, session_id, content, source, importance, created_at, last_accessed
                     """,
                     (
                         session_id,
@@ -581,6 +594,7 @@ class MemoryManager:
                         source,
                         importance,
                         idempotency_key[:128],
+                        now,
                         now,
                     ),
                 ).fetchone()
@@ -614,7 +628,7 @@ class MemoryManager:
         with self.backend.connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT id, session_id, content, source, importance, created_at
+                SELECT id, session_id, content, source, importance, created_at, last_accessed
                 FROM memories
                 WHERE session_id = ? AND id IN ({placeholders})
                 """,
@@ -629,7 +643,7 @@ class MemoryManager:
             with self.backend.connect() as conn:
                 rows = conn.execute(
                     """
-                    SELECT id, session_id, content, source, importance, created_at
+                    SELECT id, session_id, content, source, importance, created_at, last_accessed
                     FROM memories WHERE id > ? ORDER BY id LIMIT ?
                     """,
                     (last_id, max(1, min(batch_size, 5000))),
@@ -672,7 +686,7 @@ class MemoryManager:
         with self.backend.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, content, source, importance, created_at
+                SELECT id, content, source, importance, created_at, last_accessed
                 FROM memories
                 WHERE session_id = ?
                 ORDER BY importance DESC, created_at DESC
@@ -910,6 +924,66 @@ class MemoryManager:
     # 参数 limit：本次查询、返回或格式化允许的最大条数。
     def recall(self, session_id: str, query: str, limit: int = 5) -> list[str]:
         return [hit.content for hit in self.search_memories(session_id, query, limit)]
+
+    def touch_memories(self, memory_ids: list[int], *, now: float | None = None) -> None:
+        """Refresh last-access timestamps for memories returned by retrieval."""
+        ids = sorted({int(value) for value in memory_ids if int(value) > 0})
+        if not ids:
+            return
+        timestamp = time.time() if now is None else float(now)
+        placeholders = ",".join("?" for _ in ids)
+        with self.backend.connect() as conn:
+            conn.execute(
+                f"UPDATE memories SET last_accessed = ? WHERE id IN ({placeholders})",
+                [timestamp, *ids],
+            )
+
+    def consolidate_memories(
+        self,
+        *,
+        now: float | None = None,
+        ttl_days: float | None = None,
+        decay_rate: float | None = None,
+        min_importance: float | None = None,
+    ) -> dict[str, int]:
+        """Apply agi-saber decay and remove old, low-importance memories."""
+        current = time.time() if now is None else float(now)
+        ttl = self.MEMORY_TTL_DAYS if ttl_days is None else max(0.0, float(ttl_days))
+        decay = self.MEMORY_DECAY_RATE if decay_rate is None else min(1.0, max(0.0, float(decay_rate)))
+        minimum = self.MEMORY_MIN_IMPORTANCE if min_importance is None else float(min_importance)
+        with self.backend.connect(immediate=True) as conn:
+            rows = conn.execute(
+                "SELECT id, session_id, importance, created_at FROM memories"
+            ).fetchall()
+            expired: list[tuple[int, str]] = []
+            updated = 0
+            for row in rows:
+                age_days = max(0.0, current - float(row["created_at"])) / 86400.0
+                importance = min(1.0, max(0.0, float(row["importance"])))
+                decayed = importance * (decay ** age_days)
+                if decayed != importance:
+                    conn.execute(
+                        "UPDATE memories SET importance = ? WHERE id = ?",
+                        (decayed, int(row["id"])),
+                    )
+                    updated += 1
+                if ttl > 0 and age_days > ttl and decayed < minimum:
+                    expired.append((int(row["id"]), str(row["session_id"])))
+            if expired:
+                ids = [item[0] for item in expired]
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(f"DELETE FROM memory_embeddings WHERE memory_id IN ({placeholders})", ids)
+                conn.execute(f"DELETE FROM memories WHERE id IN ({placeholders})", ids)
+        if expired:
+            ids = [item[0] for item in expired]
+            if self.vector_store is not None:
+                self.vector_store.delete_memory_ids(ids)
+            if self.search_index is not None:
+                try:
+                    self.search_index.delete_memories(ids)
+                except Exception:
+                    pass
+        return {"decayed": updated, "expired": len(expired)}
 
     # 作用：清除会话全部关系事实及对应向量派生记录，保留其他会话隔离。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。

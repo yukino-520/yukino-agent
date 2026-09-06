@@ -633,6 +633,25 @@ function renderExecutionStatus(messageNode, execution) {
       .find((audit) => Array.isArray(audit?.workflow_steps));
     if (workflowAudit) renderWorkflowProgress(card, workflowAudit);
   }
+  const knowledgeSources = Array.isArray(execution.knowledge_retrieval)
+    ? execution.knowledge_retrieval
+    : [];
+  if (knowledgeSources.length) {
+    const sources = document.createElement("details");
+    sources.className = "knowledge-sources";
+    const summary = document.createElement("summary");
+    summary.textContent = `知识库来源 · ${knowledgeSources.length} 条`;
+    const list = document.createElement("ul");
+    knowledgeSources.slice(0, 8).forEach((item) => {
+      const line = document.createElement("li");
+      const base = item.knowledge_base ? `[${item.knowledge_base}] ` : "";
+      const title = item.title || item.source || item.chunk_id || "知识库片段";
+      line.textContent = `${base}${title}${item.source && item.source !== title ? ` · ${item.source}` : ""}`;
+      list.appendChild(line);
+    });
+    sources.append(summary, list);
+    card.appendChild(sources);
+  }
   const events = Array.isArray(execution.events) ? execution.events : [];
   if (events.length) {
     const timeline = document.createElement("details");

@@ -21,6 +21,7 @@ class RuntimeTrace:
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     memories_used: list[str] = field(default_factory=list)
     memory_retrieval: list[dict[str, Any]] = field(default_factory=list)
+    knowledge_retrieval: list[dict[str, Any]] = field(default_factory=list)
     intent_plan: list[dict[str, Any]] = field(default_factory=list)
     spontaneous_recalls: list[dict[str, Any]] = field(default_factory=list)
     proactive_care: list[dict[str, Any]] = field(default_factory=list)

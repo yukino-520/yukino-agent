@@ -319,7 +319,12 @@ def _rebuild_vectors(
         return 2
     core = ServiceClubCore()
     report = core.memory.rebuild_vector_index(drop_existing=drop_existing)
+    document_report = core.knowledge_base.rebuild_vector_index()
+    report["document_chunks"] = document_report.get("indexed", 0)
+    report["document_failed"] = document_report.get("failed", 0)
+    report["document_vectors"] = document_report
     report["ok"] = bool(not report.get("enabled") or report.get("failed", 0) == 0)
+    report["ok"] = bool(report["ok"] and document_report.get("failed", 0) == 0)
     return _print_storage_adapter(report, label="vector rebuild", json_output=json_output)
 
 

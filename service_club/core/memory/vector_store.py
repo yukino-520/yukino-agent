@@ -148,6 +148,95 @@ class MilvusVectorStore:
             self._record_failure(exc)
             return {}
 
+    def upsert_document_chunk(
+        self,
+        *,
+        chunk_id: str,
+        knowledge_base: str,
+        document_id: str,
+        model: str,
+        vector: list[float],
+        updated_at: float,
+    ) -> bool:
+        """Project a knowledge chunk into a separate string-keyed collection."""
+        if not chunk_id or not knowledge_base or not document_id or not model or not vector:
+            return False
+        try:
+            collection = self._ensure_document_collection(model, len(vector))
+            self._get_client().upsert(
+                collection_name=collection,
+                data=[
+                    {
+                        "chunk_id": chunk_id,
+                        "embedding": [float(value) for value in vector],
+                        "knowledge_base": knowledge_base,
+                        "document_id": document_id,
+                        "model": model,
+                        "updated_at": float(updated_at),
+                    }
+                ],
+            )
+            self._writes += 1
+            self._mark_connected()
+            return True
+        except Exception as exc:
+            self._record_failure(exc)
+            return False
+
+    def search_document_chunks(
+        self,
+        *,
+        knowledge_base: str | None,
+        model: str,
+        query_vector: list[float],
+        limit: int,
+    ) -> dict[str, float]:
+        """Search document vectors, optionally restricted to one knowledge base."""
+        if not model or not query_vector:
+            return {}
+        collection = self._collection_name(model, len(query_vector), entity="document")
+        try:
+            client = self._get_client()
+            if not client.has_collection(collection_name=collection):
+                self._mark_connected()
+                return {}
+            expression = ""
+            if knowledge_base:
+                expression = f'knowledge_base == "{self._escape_string(knowledge_base)}"'
+            raw = client.search(
+                collection_name=collection,
+                data=[[float(value) for value in query_vector]],
+                filter=expression,
+                limit=max(1, min(int(limit), 500)),
+                output_fields=["chunk_id", "knowledge_base", "document_id", "model"],
+            )
+            self._searches += 1
+            self._mark_connected()
+            hits = raw[0] if raw and isinstance(raw, list) else []
+            scores: dict[str, float] = {}
+            for hit in hits:
+                chunk_id = self._hit_value(hit, "id") or self._hit_value(hit, "chunk_id")
+                distance = self._hit_value(hit, "distance")
+                if chunk_id is None:
+                    continue
+                try:
+                    scores[str(chunk_id)] = min(1.0, max(0.0, float(distance)))
+                except (TypeError, ValueError):
+                    continue
+            return scores
+        except Exception as exc:
+            self._record_failure(exc)
+            return {}
+
+    def delete_document_chunks(self, document_id: str) -> int:
+        if not document_id:
+            return 0
+        expression = f'document_id == "{self._escape_string(document_id)}"'
+        return self._delete_from_managed(
+            filter_expression=expression,
+            entity="document",
+        )
+
     # 作用：从所有受管集合删除指定记忆 ID 的派生向量记录。
     # 参数 memory_ids：待读取、删除或评分的记忆事实 ID 列表。
     def delete_memory_ids(self, memory_ids: list[int]) -> int:
@@ -252,7 +341,7 @@ class MilvusVectorStore:
     # 参数 model：生成或读取向量时使用的嵌入模型标识。
     # 参数 dimensions：向量的维度数量。
     def _ensure_collection(self, model: str, dimensions: int) -> str:
-        collection = self._collection_name(model, dimensions)
+        collection = self._collection_name(model, dimensions, entity="memory")
         if collection in self._collections:
             return collection
         with self._lock:
@@ -271,13 +360,35 @@ class MilvusVectorStore:
             self._collections.add(collection)
         return collection
 
+    def _ensure_document_collection(self, model: str, dimensions: int) -> str:
+        collection = self._collection_name(model, dimensions, entity="document")
+        if collection in self._collections:
+            return collection
+        with self._lock:
+            client = self._get_client()
+            if not client.has_collection(collection_name=collection):
+                client.create_collection(
+                    collection_name=collection,
+                    dimension=dimensions,
+                    primary_field_name="chunk_id",
+                    id_type="string",
+                    max_length=512,
+                    vector_field_name="embedding",
+                    metric_type="COSINE",
+                    auto_id=False,
+                    enable_dynamic_field=True,
+                    consistency_level="Strong",
+                )
+            self._collections.add(collection)
+        return collection
+
     # 作用：在全部受管集合执行同一过滤删除，并记录触及集合数。
     # 参数 filter_expression：在所有受管向量集合执行的删除过滤表达式。
-    def _delete_from_managed(self, *, filter_expression: str) -> int:
+    def _delete_from_managed(self, *, filter_expression: str, entity: str = "memory") -> int:
         touched = 0
         try:
             client = self._get_client()
-            for collection in self._managed_collections(client):
+            for collection in self._managed_collections(client, entity=entity):
                 client.delete(collection_name=collection, filter=filter_expression)
                 touched += 1
             self._mark_connected()
@@ -287,10 +398,17 @@ class MilvusVectorStore:
 
     # 作用：枚举并缓存属于当前安全前缀的 Milvus 集合。
     # 参数 client：用于枚举集合的 Milvus 客户端实例。
-    def _managed_collections(self, client: Any) -> list[str]:
+    def _managed_collections(self, client: Any, *, entity: str | None = None) -> list[str]:
         names = client.list_collections()
         managed = sorted(
-            str(name) for name in names if str(name).startswith(self.collection_prefix + "_")
+            str(name)
+            for name in names
+            if str(name).startswith(self.collection_prefix + "_")
+            and (
+                entity is None
+                or (entity == "document" and "_document_" in str(name))
+                or (entity == "memory" and "_document_" not in str(name))
+            )
         )
         self._collections.update(managed)
         return managed
@@ -298,9 +416,11 @@ class MilvusVectorStore:
     # 作用：根据模型指纹和向量维度生成稳定、互不冲突的集合名。
     # 参数 model：生成或读取向量时使用的嵌入模型标识。
     # 参数 dimensions：向量的维度数量。
-    def _collection_name(self, model: str, dimensions: int) -> str:
+    def _collection_name(self, model: str, dimensions: int, *, entity: str = "memory") -> str:
         fingerprint = hashlib.sha256(model.encode("utf-8")).hexdigest()[:12]
-        return f"{self.collection_prefix}_{fingerprint}_{int(dimensions)}"
+        if entity == "memory":
+            return f"{self.collection_prefix}_{fingerprint}_{int(dimensions)}"
+        return f"{self.collection_prefix}_{entity}_{fingerprint}_{int(dimensions)}"
 
     # 作用：生成隐藏内嵌凭据的后端地址，供状态接口安全展示。
     # 参数：无。

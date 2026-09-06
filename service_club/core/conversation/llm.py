@@ -1437,6 +1437,34 @@ class ServiceClubModel:
             "health": self.health.status((self.model, self.fallback_model)),
         }
 
+    def generate_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 512,
+    ) -> str:
+        """Run a bounded, tool-free auxiliary completion for retrieval helpers."""
+        if self.client is None or not self.model:
+            return ""
+        completion = self._completion_for_turn(
+            {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": max(0.0, min(float(temperature), 1.0)),
+                "max_tokens": max(64, min(int(max_tokens), 2048)),
+                "timeout": self.timeout_seconds,
+                **self.provider_request_options(self.model),
+            },
+            [],
+        )
+        self._record_usage(self.model, completion)
+        return str(completion.choices[0].message.content or "").strip()
+
     # 作用：组装本轮实际模型、备用切换和各次尝试的可观测摘要。
     # 参数 model_used：最终实际产出回复的模型名称。
     # 参数 fallback_used：是否切换到了备用模型。

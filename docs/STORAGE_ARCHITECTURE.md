@@ -7,7 +7,7 @@ AGI Yukino 不再提供 SQLite 运行模式。生产运行时固定为以下职�
 1. **PostgreSQL + pgvector 是唯一事实源**：会话、记忆、文档、任务、权限、幂等、审计、outbox、向量原文和图谱关系都只在这里裁决。
 2. **Elasticsearch 是词法检索投影**：保存记忆与独立知识库文档分块的 BM25 索引，可从 PostgreSQL 全量重建。
 3. **Kafka 是事件传输层**：PostgreSQL 事务内先写 outbox，多实例 dispatcher 使用 `FOR UPDATE SKIP LOCKED` 领取并至少一次投递。
-4. **Milvus 与 Neo4j 是可选投影**：分别扩展语义检索和图遍历，不成为新的事实源。
+4. **Milvus 与 Neo4j 是可选投影**：分别扩展记忆/知识库 chunk 的语义检索和图遍历，不成为新的事实源。
 
 ```mermaid
 flowchart LR
@@ -15,7 +15,7 @@ flowchart LR
     PG --> OUTBOX["transactional outbox"]
     OUTBOX --> KAFKA["Kafka\n多实例事件流"]
     PG -. "幂等重建" .-> ES["Elasticsearch\n记忆 BM25 + 文档分块"]
-    PG -. "幂等重建" .-> MILVUS["Milvus\n向量投影"]
+    PG -. "幂等重建" .-> MILVUS["Milvus\n记忆 + 文档 chunk 向量投影"]
     PG -. "幂等重建" .-> NEO4J["Neo4j\n图投影"]
     ES --> RRF["RRF 候选融合与精排"]
     MILVUS --> RRF
@@ -33,7 +33,9 @@ flowchart LR
 4. 使用 RRF 融合排名，再叠加中文片段、概念、图谱、重要度及时效信号；
 5. 最终命中才进入 Prompt，Elasticsearch/Milvus 中的陈旧或越权记录无法单独成为回答证据。
 
-独立知识库使用 `knowledge_documents` 和 `knowledge_chunks` 保存规范事实，Elasticsearch 使用独立的 `*_documents_v1` 索引。大文档先分块，避免把原始二进制或超大正文直接写入 Elasticsearch。
+独立知识库使用 `knowledge_documents` 和 `knowledge_chunks` 保存规范事实，chunk 的 embedding 原文和模型指纹也保存在 PostgreSQL；Elasticsearch 使用独立的 `*_documents_v1` 索引，Milvus 使用独立的 `*_document_*` 集合族。大文档先分块，避免把原始二进制或超大正文直接写入索引。
+
+知识库 chunk 的向量写入在文档事实提交和 Elasticsearch 投影之后执行，Embedding 服务或 Milvus 暂时不可用时不影响文档落库；后续可通过 `agi-yukino storage rebuild-vectors --confirmed` 从 PostgreSQL 中的 embedding 重新投影。
 
 知识库 API：
 

@@ -1,5 +1,6 @@
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from service_club.core.tooling.executor import ParsedToolAction, parse_tool_action
 from service_club.core.types import ToolAction
@@ -27,9 +28,62 @@ class IntentStep:
         }
 
 
+@dataclass(frozen=True)
+class IntentInterpretation:
+    original_text: str
+    rewritten_text: str
+    corrections: tuple[str, ...]
+    steps: tuple[IntentStep, ...]
+    needs_clarification: bool = False
+    clarification_question: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "original_text": self.original_text,
+            "rewritten_text": self.rewritten_text,
+            "corrections": list(self.corrections),
+            "steps": [step.as_trace() for step in self.steps],
+            "needs_clarification": self.needs_clarification,
+            "clarification_question": self.clarification_question,
+        }
+
+
 # 作用：用确定性规则把复合自然语言委托拆成可直接执行和验收的工具步骤。
 # 参数：无。
 class IntentDecomposer:
+    CORRECTIONS = {
+        "记忆一下": "记住",
+        "帮我记下": "记住",
+        "帮我回忆": "回忆",
+        "搜寻文件": "搜索文件",
+        "查一下文件": "搜索文件",
+        "设个提醒": "提醒我",
+    }
+
+    def interpret(self, text: str) -> IntentInterpretation:
+        original = text.strip()
+        rewritten = " ".join(original.split())
+        corrections: list[str] = []
+        for source, target in self.CORRECTIONS.items():
+            if source in rewritten:
+                rewritten = rewritten.replace(source, target)
+                corrections.append(f"{source}->{target}")
+        steps = self.decompose(rewritten)
+        missing: list[str] = []
+        for step in steps:
+            if step.action in {"read_file", "read_document", "analyze_file", "web_fetch", "cancel_reminder", "forget", "recall"} and not step.argument:
+                missing.append("目标")
+            elif step.action == "write_file" and "\n" not in step.argument:
+                missing.append("文件内容")
+        missing = list(dict.fromkeys(missing))
+        return IntentInterpretation(
+            original_text=original,
+            rewritten_text=rewritten,
+            corrections=tuple(corrections),
+            steps=tuple(steps),
+            needs_clarification=bool(missing),
+            clarification_question=("为了继续处理，请补充" + "、".join(missing) + "。") if missing else "",
+        )
     # 作用：将用户文本拆成多个片段，解析工具动作并合并去重为执行步骤。
     # 参数 text：待识别、切分、清理或合成语音的输入文本。
     def decompose(self, text: str) -> list[IntentStep]:

@@ -294,6 +294,8 @@ class KnowledgeGraphStore:
         self.backend = backend
         self.projector = projector
         self._projection_failures = 0
+        self.max_hops = max(1, min(3, int(os.getenv("YUKINO_GRAPH_MAX_HOPS", "1"))))
+        self.max_nodes = max(20, min(1000, int(os.getenv("YUKINO_GRAPH_MAX_NODES", "200"))))
         self.init()
 
     # 作用：创建实体、关系事实表及会话查询索引。
@@ -548,63 +550,95 @@ class KnowledgeGraphStore:
             ).fetchone()
         return int(row["entities"]) == 0 and int(row["relations"]) == 0
 
-    # 作用：在关系事实源匹配种子实体，并扩展其一跳关系和邻居节点。
+    # 作用：在关系事实源匹配种子实体，并进行有界多跳邻居扩展。
     # 参数 session_id：用于隔离所有会话级事实与状态的唯一标识。
     # 参数 query：用于检索、匹配或遗忘的用户查询文本。
     # 参数 limit：本次查询、返回或格式化允许的最大条数。
-    def search(self, session_id: str, query: str, *, limit: int = 100) -> dict[str, Any]:
+    def search(
+        self,
+        session_id: str,
+        query: str,
+        *,
+        limit: int = 100,
+        max_hops: int | None = None,
+    ) -> dict[str, Any]:
         normalized = self._normalize_label(query)
         if not normalized:
             return self.list(session_id, limit=limit)
         like = f"%{normalized}%"
+        hops = self.max_hops if max_hops is None else max(1, min(3, int(max_hops)))
+        node_limit = max(1, min(limit, self.max_nodes))
         with self.backend.connect() as conn:
-            nodes = conn.execute(
+            seed_rows = conn.execute(
                 """
                 SELECT * FROM knowledge_entities
                 WHERE session_id = ? AND status = 'active'
                   AND (normalized_label LIKE ? OR entity_type LIKE ?)
                 ORDER BY confidence DESC, updated_at DESC LIMIT ?
                 """,
-                (session_id, like, like, max(1, min(limit, 1000))),
+                (session_id, like, like, node_limit),
             ).fetchall()
-            node_ids = [str(row["id"]) for row in nodes]
-            seed_node_ids = list(node_ids)
+            seed_ids = [str(row["id"]) for row in seed_rows]
+            node_by_id = {str(row["id"]): self._entity(row) for row in seed_rows}
+            hop_by_id = {node_id: 0 for node_id in seed_ids}
+            frontier = set(seed_ids)
+            seed_node_ids = list(seed_ids)
             edges: list[Any] = []
-            if node_ids:
-                placeholders = ",".join("?" for _ in node_ids)
-                edges = conn.execute(
+            for hop in range(1, hops + 1):
+                if not frontier or len(node_by_id) >= node_limit:
+                    break
+                ids = sorted(frontier)
+                placeholders = ",".join("?" for _ in ids)
+                batch = conn.execute(
                     f"""
                     SELECT * FROM knowledge_relations
                     WHERE session_id = ? AND status = 'active'
                       AND (source_id IN ({placeholders}) OR target_id IN ({placeholders}))
-                    ORDER BY updated_at DESC LIMIT ?
+                    ORDER BY confidence DESC, updated_at DESC LIMIT ?
                     """,
-                    (session_id, *node_ids, *node_ids, max(1, min(limit * 2, 2000))),
+                    (session_id, *ids, *ids, min(max(limit * 4, 50), 2000)),
                 ).fetchall()
-                related_ids = sorted(
-                    {
-                        str(row[key])
-                        for row in edges
-                        for key in ("source_id", "target_id")
-                    }
-                    - set(node_ids)
-                )
-                if related_ids:
-                    related_placeholders = ",".join("?" for _ in related_ids)
-                    neighbors = conn.execute(
+                edges.extend(batch)
+                next_frontier: set[str] = set()
+                for edge in batch:
+                    for key in ("source_id", "target_id"):
+                        candidate = str(edge[key])
+                        if candidate not in node_by_id:
+                            next_frontier.add(candidate)
+                if not next_frontier:
+                    break
+                next_frontier = set(sorted(next_frontier)[: max(0, node_limit - len(node_by_id))])
+                if next_frontier:
+                    related_placeholders = ",".join("?" for _ in next_frontier)
+                    rows = conn.execute(
                         f"""
                         SELECT * FROM knowledge_entities
                         WHERE session_id = ? AND status = 'active'
                           AND id IN ({related_placeholders})
                         ORDER BY confidence DESC, updated_at DESC
                         """,
-                        (session_id, *related_ids),
+                        (session_id, *sorted(next_frontier)),
                     ).fetchall()
-                    nodes = [*nodes, *neighbors]
+                    frontier = set()
+                    for row in rows:
+                        node_id = str(row["id"])
+                        if node_id not in node_by_id:
+                            node_by_id[node_id] = self._entity(row)
+                            hop_by_id[node_id] = hop
+                            frontier.add(node_id)
+                else:
+                    frontier = set()
+            nodes = []
+            for node_id, node in node_by_id.items():
+                node = dict(node)
+                node["hop"] = hop_by_id.get(node_id, 0)
+                nodes.append(node)
+            seed_node_ids = seed_ids
         return {
-            "nodes": [self._entity(row) for row in nodes],
+            "nodes": nodes,
             "edges": [self._relation(row) for row in edges],
             "seed_node_ids": seed_node_ids,
+            "max_hops": hops,
         }
 
     # 作用：从事实库删除会话全部图事实，并同步清理 Neo4j 投影。
@@ -763,6 +797,8 @@ class KnowledgeGraphStore:
             "relations": int(relations["count"]),
             "projection": projection,
             "projection_failures": self._projection_failures,
+            "max_hops": self.max_hops,
+            "max_nodes": self.max_nodes,
         }
 
     # 作用：关闭可选 Neo4j 投影器连接。

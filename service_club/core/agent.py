@@ -105,9 +105,18 @@ class ServiceClubCore:
         self.memory.init()
         self.search_index = configured_search_index()
         self.memory.bind_search_index(self.search_index)
-        self.knowledge_base = KnowledgeBaseStore(self.memory.backend, self.search_index)
+        self.knowledge_base = KnowledgeBaseStore(
+            self.memory.backend,
+            self.search_index,
+            generate_fn=(
+                self.model.generate_text
+                if callable(getattr(self.model, "generate_text", None))
+                else None
+            ),
+        )
         self.vector_store = configured_vector_store(settings.data_dir)
         self.memory.bind_vector_store(self.vector_store)
+        self.memory_lifecycle = self.memory.consolidate_memories()
         self.agent_requests: AgentRequestRepository = AgentRequestStore(
             backend=self.memory.backend
         )
@@ -135,11 +144,18 @@ class ServiceClubCore:
         self.behavior_instincts = BehaviorInstinctManager(self.memory)
         self.context_window = ContextWindowManager(self.memory)
         self.embedding_provider = OpenAIEmbeddingProvider.from_env()
+        self.knowledge_base.embedding_provider = self.embedding_provider
+        self.knowledge_base.vector_store = self.vector_store
         self.memory_retriever = HybridMemoryRetriever(
             self.memory,
             embedding_provider=self.embedding_provider,
             vector_store=self.vector_store,
             search_index=self.search_index,
+            generate_fn=(
+                self.model.generate_text
+                if callable(getattr(self.model, "generate_text", None))
+                else None
+            ),
         )
         self.event_stream = KafkaOutboxDispatcher(
             self.memory.backend, projector=self.search_index.project_event
@@ -250,12 +266,22 @@ class ServiceClubCore:
             club_orchestrator = ClubOrchestrator(character_agents)
             embedding_provider = OpenAIEmbeddingProvider.from_env()
             vector_store = configured_vector_store(settings.data_dir)
+            self.knowledge_base.generate_fn = (
+                model.generate_text
+                if callable(getattr(model, "generate_text", None))
+                else None
+            )
             memory_retriever = HybridMemoryRetriever(
                 self.memory,
                 embedding_provider=embedding_provider,
                 vector_store=vector_store,
                 search_index=self.search_index,
                 knowledge_graph=capabilities.knowledge_graph,
+                generate_fn=(
+                    model.generate_text
+                    if callable(getattr(model, "generate_text", None))
+                    else None
+                ),
             )
             previous_vector_store = self.vector_store
             previous_capabilities = self.capabilities
@@ -268,6 +294,8 @@ class ServiceClubCore:
             self.club_orchestrator = club_orchestrator
             self.embedding_provider = embedding_provider
             self.vector_store = vector_store
+            self.knowledge_base.embedding_provider = embedding_provider
+            self.knowledge_base.vector_store = vector_store
             self.memory_retriever = memory_retriever
             if previous_vector_store is not None:
                 previous_vector_store.close()
@@ -490,7 +518,8 @@ class ServiceClubCore:
             else emotion.label
         )
         primary_agent = self.character_agents.get(route.primary_agent)
-        intent_steps = self.intent_decomposer.decompose(latest_text)
+        intent_interpretation = self.intent_decomposer.interpret(latest_text)
+        intent_steps = list(intent_interpretation.steps)
         execution_contract = self.execution_planner.build(
             text=latest_text,
             intent_steps=intent_steps,
@@ -515,6 +544,18 @@ class ServiceClubCore:
             allowed_tools=primary_agent.allowed_tools,
         )
         tool_results = [*attachment_tool_results]
+        if intent_interpretation.needs_clarification:
+            tool_results.append(
+                ToolExecutionResult(
+                    action="none",
+                    success=False,
+                    error=intent_interpretation.clarification_question,
+                    audit={
+                        "intent_clarification_required": True,
+                        "intent_rewrite": intent_interpretation.rewritten_text,
+                    },
+                )
+            )
         tool_results.extend(
             self.tools.execute_parsed(
                 request.session_id,
@@ -522,8 +563,9 @@ class ServiceClubCore:
                 allowed_tools=primary_agent.allowed_tools,
             )
             for step in intent_steps
+            if not intent_interpretation.needs_clarification
         )
-        if not intent_steps:
+        if not intent_steps and not intent_interpretation.needs_clarification:
             tool_result = self.tools.execute(
                 request.session_id,
                 latest_text,
@@ -541,6 +583,16 @@ class ServiceClubCore:
             ]
         else:
             tool_context = []
+        if intent_interpretation.corrections:
+            tool_context.append(
+                "用户意图已做轻量规范化（仅供内部使用）："
+                + "、".join(intent_interpretation.corrections)
+            )
+        if intent_interpretation.needs_clarification:
+            tool_context.append(
+                "用户请求缺少必要参数，必须先澄清，不得猜测："
+                + intent_interpretation.clarification_question
+            )
         untrusted_context = False
         injection_detected_context = False
         for result in tool_results:
@@ -578,7 +630,10 @@ class ServiceClubCore:
                 tool_results,
             )
         )
-        enable_agent_followup = not pre_model_side_effects_complete and not any(
+        enable_agent_followup = (
+            not intent_interpretation.needs_clarification
+            and not pre_model_side_effects_complete
+            and not any(
             result.audit.get("requires_confirmation")
             or result.action
             in {
@@ -588,6 +643,7 @@ class ServiceClubCore:
                 "cancel_capability_operation",
             }
             for result in tool_results
+            )
         )
         self.permanent_memory.record_key_event(
             request.session_id,
@@ -634,11 +690,56 @@ class ServiceClubCore:
         )
         permanent_segment = self.permanent_memory.get_prompt_segment(request.session_id)
         memory_hits = self.memory_retriever.search(
-            request.session_id, latest_text, limit=5
+            request.session_id,
+            latest_text,
+            limit=5,
+            history=[
+                {"role": message.role, "content": message.content}
+                for message in request.messages[-6:]
+            ],
         )
         memories = [hit.content for hit in memory_hits]
         if permanent_segment != "- 无跨会话永久记忆":
             memories = [permanent_segment, *memories]
+
+        # Knowledge-base retrieval is part of the normal chat path, but only
+        # for informational turns. Tool/delegation requests remain governed by
+        # the existing execution contract and never inherit document context.
+        knowledge_hits: list[dict] = []
+        if (
+            not intent_steps
+            and not intent_interpretation.needs_clarification
+            and self.knowledge_base.status().get("documents", 0) > 0
+        ):
+            knowledge_hits = self.knowledge_base.search_all(latest_text, limit=5)
+            for item in knowledge_hits:
+                title = str(item.get("title", "")).strip()
+                base = str(item.get("knowledge_base", "")).strip()
+                source = str(item.get("source", "")).strip()
+                label = "知识库资料"
+                if base:
+                    label += f"[{base}]"
+                if title:
+                    label += f"《{title}》"
+                if source and source != base:
+                    label += f" 来源:{source}"
+                result = ToolExecutionResult(
+                    action="knowledge_search",
+                    success=True,
+                    content=f"{label}\n{str(item.get('content', '')).strip()}",
+                    audit={
+                        "output_trust": "untrusted",
+                        "knowledge_base": base,
+                        "document_id": str(item.get("document_id", "")),
+                        "chunk_id": str(item.get("id", "")),
+                    },
+                )
+                self.output_security.assess(result, source="knowledge_base")
+                tool_context.append(self.output_security.render_for_model(result))
+                untrusted_context = True
+                injection_detected_context = injection_detected_context or bool(
+                    result.audit.get("prompt_injection_detected")
+                )
         spontaneous_recalls = self.spontaneous_recall.collect(
             session_id=request.session_id,
             text=latest_text,
@@ -1100,6 +1201,17 @@ class ServiceClubCore:
             "checkpoint": final_checkpoint,
             "cancel_requested": bool(task.get("cancel_requested")) if task else False,
             "retryable": outcome.status in {"failed", "degraded", "cancelled", "interrupted"},
+            "knowledge_retrieval": [
+                {
+                    "knowledge_base": str(item.get("knowledge_base", "")),
+                    "document_id": str(item.get("document_id", "")),
+                    "chunk_id": str(item.get("id", "")),
+                    "title": str(item.get("title", "")),
+                    "source": str(item.get("source", item.get("source_uri", ""))),
+                    "score": float(item.get("score", 0.0)),
+                }
+                for item in knowledge_hits
+            ],
         }
         sticker_url = (
             pick_sticker(self.sticker_base, character, emotion.label)
@@ -1231,7 +1343,25 @@ class ServiceClubCore:
         trace.tool_results = [result.model_dump() for result in all_tool_results]
         trace.memories_used = list(memories)
         trace.memory_retrieval = [hit.as_dict() for hit in memory_hits]
+        trace.knowledge_retrieval = [
+            {
+                "knowledge_base": str(item.get("knowledge_base", "")),
+                "document_id": str(item.get("document_id", "")),
+                "chunk_id": str(item.get("id", "")),
+                "title": str(item.get("title", "")),
+                "source": str(item.get("source", item.get("source_uri", ""))),
+                "score": float(item.get("score", 0.0)),
+            }
+            for item in knowledge_hits
+        ]
         trace.intent_plan = [step.as_trace() for step in intent_steps]
+        trace.intent_plan.append(
+            {
+                "action": "interpretation",
+                "argument": intent_interpretation.rewritten_text,
+                "source_text": intent_interpretation.original_text,
+            }
+        )
         trace.spontaneous_recalls = [recall.as_dict() for recall in spontaneous_recalls]
         trace.proactive_care = [item.as_dict() for item in proactive_care]
         trace.companion_state = companion_state
@@ -1269,13 +1399,21 @@ class ServiceClubCore:
             tool_results=all_tool_results,
             memories_used=memories,
             memory_retrieval=[hit.as_dict() for hit in memory_hits],
+            knowledge_retrieval=knowledge_hits,
             trace_id=trace.trace_id,
             route_reasoning=route.reasoning,
             route_scorecard=route.scorecard,
             active_agents=effective_active_agents,
             sticker_url=sticker_url,
             audio_url=audio_url,
-            intent_plan=[step.as_trace() for step in intent_steps],
+            intent_plan=[
+                *[step.as_trace() for step in intent_steps],
+                {
+                    "action": "interpretation",
+                    "argument": intent_interpretation.rewritten_text,
+                    "source_text": intent_interpretation.original_text,
+                },
+            ],
             spontaneous_recalls=[recall.as_dict() for recall in spontaneous_recalls],
             proactive_care=[item.as_dict() for item in proactive_care],
             companion_state=companion_state,
